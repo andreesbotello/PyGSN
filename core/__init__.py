@@ -1,0 +1,3 @@
+"""
+PyGSN Core - Package Initialization
+"""

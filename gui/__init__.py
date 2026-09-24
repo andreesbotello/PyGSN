@@ -1,0 +1,3 @@
+"""
+PyGSN GUI - Package Initialization
+"""
