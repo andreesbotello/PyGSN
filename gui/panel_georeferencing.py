@@ -73,9 +73,9 @@ class GeoreferencingPanel:
                 dpg.add_input_text(label="Ruta Salida", default_value="output/Informe_Georreferenciacion.txt",
                                    width=260, tag="geo_output_path")
             with dpg.group(horizontal=True):
-                dpg.add_button(label="▶ CALCULAR GEORREFERENCIACIÓN", callback=self._cb_solve,
+                dpg.add_button(label="CALCULAR GEORREFERENCIACION", callback=self._cb_solve,
                                width=210, height=28)
-                dpg.add_button(label="💾 EXPORTAR INFORME TXT", callback=self._cb_export_txt,
+                dpg.add_button(label="EXPORTAR INFORME TXT", callback=self._cb_export_txt,
                                width=180, height=28)
 
             dpg.add_spacer(height=5)
@@ -156,10 +156,10 @@ class GeoreferencingPanel:
 
             self.last_report_text = generate_georeferencing_report(sol)
             dpg.set_value("geo_report_viewer", self.last_report_text)
-            dpg.set_value("geo_status_text", "✓ Georreferenciación calculada con éxito")
+            dpg.set_value("geo_status_text", "[OK] Georreferenciacion calculada con exito")
 
         except Exception as e:
-            dpg.set_value("geo_status_text", f"Error en cálculo: {str(e)}")
+            dpg.set_value("geo_status_text", f"Error en calculo: {str(e)}")
 
     def _cb_export_txt(self):
         if not self.last_report_text:
@@ -170,7 +170,7 @@ class GeoreferencingPanel:
             out_path = Path(out_str)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(self.last_report_text, encoding="utf-8")
-            dpg.set_value("geo_status_text", f"✓ Fichero exportado en: {out_path.name}")
+            dpg.set_value("geo_status_text", f"[OK] Fichero exportado en: {out_path.name}")
 
 
 # Alias de compatibilidad

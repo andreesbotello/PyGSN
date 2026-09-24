@@ -101,7 +101,9 @@ def main():
     parser.add_argument("--cli", action="store_true", help="Ejecutar en modo consola sin interfaz grafica")
     parser.add_argument("--run", action="store_true", help="Ejecutar resolucion completa")
     parser.add_argument("--p1", action="store_true", help="Alias de compatibilidad para resolver la Practica 1")
+    parser.add_argument("--project", type=str, default=None, help="Ruta al archivo de proyecto .pygsn")
     parser.add_argument("--body", type=str, default=None, help="Ruta al fichero .txt de definicion de la plataforma y sensores")
+    parser.add_argument("--obs", type=str, default=None, help="Ruta al fichero .txt de observaciones de sensores")
     parser.add_argument("--test", action="store_true", help="Ejecutar pruebas unitarias de validacion")
     parser.add_argument("--output", "-o", type=str, default="output/Informe_Georreferenciacion.txt",
                         help="Ruta de salida del informe TXT")
@@ -114,6 +116,24 @@ def main():
         runner = unittest.TextTestRunner(verbosity=2)
         result = runner.run(suite)
         sys.exit(0 if result.wasSuccessful() else 1)
+
+    if args.project:
+        from core.project import Project
+        from core.operators import GeoreferencingOperator, ReportingOperator
+        print(f"> Cargando proyecto PyGSN: {args.project}")
+        proj = Project.load(args.project)
+        geo_op = GeoreferencingOperator()
+        res = geo_op.execute(proj, observations=args.obs)
+        if not res.success:
+            print(f"[ERROR] Fallo en la ejecucion del operador: {res.error_message}")
+            sys.exit(1)
+        for msg in res.messages:
+            print(f"  {msg}")
+        rep_op = ReportingOperator()
+        rep_res = rep_op.execute(proj, georeferencing_result=res.data["georeferencing_result"], output_path=args.output)
+        if rep_res.success:
+            print(f"> Informe guardado exitosamente en: {args.output}")
+        sys.exit(0)
 
     if args.cli or args.run or args.p1:
         run_cli_georeferencing(args.output, args.body)

@@ -1,0 +1,359 @@
+{
+  "format": "PyGSN_Project",
+  "version": "1.0.0",
+  "name": "Vehiculo Multisensor de Cartografia Movil",
+  "description": "Proyecto de georreferenciacion directa y calibracion de plataforma multisensor GNSS/INS",
+  "ellipsoid_name": "GRS80",
+  "metadata": {
+    "author": "PyGSN Engineering Team",
+    "version": "1.0.0",
+    "created_at": "2026-09-24T20:00:00"
+  },
+  "config": {
+    "utm_zone": 30,
+    "geoid_undulation_n": 49.548,
+    "mag_declination_deg": 1.25
+  },
+  "platform": {
+    "name": "Plataforma de Referencia (4x GNSS + INS + 2x CAM)",
+    "platform_type": "CAR",
+    "length_m": 1.2,
+    "width_m": 0.8,
+    "height_m": 0.1,
+    "sensors": {
+      "PLA": {
+        "code": "PLA",
+        "name": "Centro Plataforma",
+        "sensor_type": "ORIGIN",
+        "lever_arm_b": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "boresight_deg": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "geodetic_obs": null,
+        "attitude_obs_deg": null
+      },
+      "INS": {
+        "code": "INS",
+        "name": "SBG Ellipse2-N",
+        "sensor_type": "INS",
+        "lever_arm_b": [
+          0.0,
+          0.0,
+          -0.025
+        ],
+        "boresight_deg": [
+          0.263568,
+          -0.437974,
+          2.869214
+        ],
+        "geodetic_obs": null,
+        "attitude_obs_deg": null
+      },
+      "REC2": {
+        "code": "REC2",
+        "name": "GNSS Antena 2",
+        "sensor_type": "GNSS",
+        "lever_arm_b": [
+          0.4,
+          -0.4,
+          -0.015
+        ],
+        "boresight_deg": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "geodetic_obs": null,
+        "attitude_obs_deg": null
+      },
+      "REC3": {
+        "code": "REC3",
+        "name": "GNSS Antena 3",
+        "sensor_type": "GNSS",
+        "lever_arm_b": [
+          0.4,
+          0.4,
+          -0.015
+        ],
+        "boresight_deg": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "geodetic_obs": null,
+        "attitude_obs_deg": null
+      },
+      "REC4": {
+        "code": "REC4",
+        "name": "GNSS Antena 4",
+        "sensor_type": "GNSS",
+        "lever_arm_b": [
+          -0.4,
+          -0.4,
+          -0.015
+        ],
+        "boresight_deg": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "geodetic_obs": null,
+        "attitude_obs_deg": null
+      },
+      "REC5": {
+        "code": "REC5",
+        "name": "GNSS Antena 5",
+        "sensor_type": "GNSS",
+        "lever_arm_b": [
+          -0.4,
+          0.4,
+          -0.015
+        ],
+        "boresight_deg": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "geodetic_obs": null,
+        "attitude_obs_deg": null
+      },
+      "CAM1": {
+        "code": "CAM1",
+        "name": "Cámara Frontal Izq",
+        "sensor_type": "CAMERA",
+        "lever_arm_b": [
+          0.7,
+          -0.15,
+          -0.08
+        ],
+        "boresight_deg": [
+          0.196543,
+          0.541674,
+          -1.355847
+        ],
+        "geodetic_obs": null,
+        "attitude_obs_deg": null
+      },
+      "CAM2": {
+        "code": "CAM2",
+        "name": "Cámara Frontal Der",
+        "sensor_type": "CAMERA",
+        "lever_arm_b": [
+          0.7,
+          0.15,
+          -0.08
+        ],
+        "boresight_deg": [
+          -0.287495,
+          0.426588,
+          1.128792
+        ],
+        "geodetic_obs": null,
+        "attitude_obs_deg": null
+      }
+    }
+  },
+  "asset": {
+    "name": "Chasis Vehiculo",
+    "vertices": [
+      [
+        0.6,
+        -0.4,
+        0.0
+      ],
+      [
+        0.6,
+        0.4,
+        0.0
+      ],
+      [
+        -0.6,
+        0.4,
+        0.0
+      ],
+      [
+        -0.6,
+        -0.4,
+        0.0
+      ],
+      [
+        0.6,
+        -0.4,
+        -0.275
+      ],
+      [
+        0.6,
+        0.4,
+        -0.275
+      ],
+      [
+        0.3,
+        0.4,
+        -0.275
+      ],
+      [
+        0.3,
+        -0.4,
+        -0.275
+      ],
+      [
+        0.24,
+        -0.34,
+        -0.5
+      ],
+      [
+        0.24,
+        0.34,
+        -0.5
+      ],
+      [
+        -0.3,
+        0.34,
+        -0.5
+      ],
+      [
+        -0.3,
+        -0.34,
+        -0.5
+      ],
+      [
+        -0.3,
+        -0.4,
+        -0.275
+      ],
+      [
+        -0.3,
+        0.4,
+        -0.275
+      ],
+      [
+        -0.6,
+        0.4,
+        -0.275
+      ],
+      [
+        -0.6,
+        -0.4,
+        -0.275
+      ]
+    ],
+    "edges": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        2,
+        3
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        5
+      ],
+      [
+        5,
+        6
+      ],
+      [
+        6,
+        7
+      ],
+      [
+        7,
+        4
+      ],
+      [
+        0,
+        4
+      ],
+      [
+        1,
+        5
+      ],
+      [
+        7,
+        8
+      ],
+      [
+        6,
+        9
+      ],
+      [
+        8,
+        9
+      ],
+      [
+        9,
+        10
+      ],
+      [
+        10,
+        11
+      ],
+      [
+        11,
+        8
+      ],
+      [
+        11,
+        12
+      ],
+      [
+        10,
+        13
+      ],
+      [
+        12,
+        13
+      ],
+      [
+        13,
+        14
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        15,
+        12
+      ],
+      [
+        2,
+        14
+      ],
+      [
+        3,
+        15
+      ],
+      [
+        6,
+        13
+      ],
+      [
+        7,
+        12
+      ]
+    ],
+    "faces": [],
+    "color_rgb": [
+      140,
+      160,
+      185
+    ]
+  }
+}

@@ -31,9 +31,9 @@ class PlatformEditor:
                 dpg.add_button(label="Limpiar Todo", callback=self._cb_clear)
 
             with dpg.group(horizontal=True):
-                dpg.add_input_text(default_value="data/calibracion_p1.txt", width=190, tag="input_body_txt_path")
-                dpg.add_button(label="📂 Cargar TXT", callback=self._cb_load_txt)
-                dpg.add_button(label="💾 Guardar TXT", callback=self._cb_save_txt)
+                dpg.add_input_text(default_value="data/calibracion_vehiculo.txt", width=200, tag="input_body_txt_path")
+                dpg.add_button(label="Cargar TXT", callback=self._cb_load_txt)
+                dpg.add_button(label="Guardar TXT", callback=self._cb_save_txt)
 
             dpg.add_spacer(height=5)
             dpg.add_input_text(label="Nombre del Chasis", default_value=self.platform.name,

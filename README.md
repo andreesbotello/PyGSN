@@ -8,21 +8,21 @@ Herramienta computacional modular de alta precisión para la transformación rig
 
 ---
 
-## 🚀 Guía Rápida de Ejecución para Evaluación (Profesor)
+## Guía Rápida de Ejecución
 
-El proyecto está diseñado para ejecutarse **de inmediato sin configuración manual ni alteración del entorno global** de su equipo:
+El proyecto está diseñado para ejecutarse **de inmediato sin configuración manual ni alteración del entorno global** del sistema:
 
 ### Opción A: Lanzamiento en 1 Clic (Windows)
 1. Descargue o clone el repositorio de GitHub.
 2. Haga **doble clic en `run.bat`**.
    - *El script detecta Python, crea automáticamente un entorno virtual aislado (`.venv`), instala las dependencias (`numpy`, `scipy`, `dearpygui`) y abre la interfaz gráfica.*
 
-### Opción B: Evaluación Directa por Terminal (Modo CLI sin GUI)
-Si prefiere evaluar numéricamente los resultados sin abrir ventanas gráficas:
+### Opción B: Ejecución Directa por Terminal (Modo CLI sin GUI)
+Si se requiere procesar por lotes o en entornos headless sin interfaz gráfica:
 ```bash
 python main.py --run --body data/calibracion_vehiculo.txt --output output/Informe_Georreferenciacion.txt
 ```
-*Calcula instantáneamente las transformaciones, la actitud $C_b^n$ por SVD de Kabsch, la propagación a ECEF, Geodésicas y UTM Huso 30 con altitudes ortométricas, y genera el archivo de texto detallado paso a paso.*
+*Calcula las transformaciones cinemáticas, la actitud $C_b^n$ por SVD de Kabsch, la propagación a ECEF, Geodésicas y UTM Huso 30 con altitudes ortométricas, y genera el informe técnico tabular paso a paso.*
 
 ### Opción C: Ejecución de Tests de Validación Numérica
 ```bash
@@ -32,9 +32,9 @@ python main.py --test
 
 ---
 
-## 📐 Marcos de Referencia Soportados
+## Marcos de Referencia Soportados
 
-El software modela la cinemática y la geometría de los 5 marcos de referencia del curso:
+El software modela la cinemática y la geometría de los 5 marcos de referencia:
 
 ```
   [ i-frame ]  (Inercial / ECI: Origen geocéntrico, ejes fijos a estrellas)
@@ -58,7 +58,7 @@ El software modela la cinemática y la geometría de los 5 marcos de referencia 
 
 ---
 
-## 🖥️ Interfaz Gráfica: 3 Vistas Ortogonales 2D Técnicas (DearPyGui)
+## Interfaz Gráfica: 3 Vistas Ortogonales 2D Técnicas (DearPyGui)
 
 Siguiendo principios de diseño CAD y dibujo técnico, **no se utiliza renderizado 3D perspectivo**, garantizando máxima precisión visual y rapidez:
 
@@ -74,7 +74,7 @@ Siguiendo principios de diseño CAD y dibujo técnico, **no se utiliza renderiza
 
 ---
 
-## 📁 Estructura del Repositorio
+## Estructura del Repositorio
 
 ```
 PyGSN/
@@ -108,10 +108,10 @@ PyGSN/
 
 ---
 
-## 📄 Formato del Fichero de Salida (Entrega Académica)
+## Formato del Fichero de Salida (Reporte Técnico de Georreferenciación)
 
 Al ejecutar la resolución (vía GUI o CLI), se genera un fichero `.txt` con formato tabular riguroso que incluye:
-- Datos identificativos del estudiante, fecha, asignatura y elipsoide (GRS80).
+- Metadatos del cálculo, fecha, elipsoide de referencia (GRS80/WGS84) y parámetros geodésicos.
 - Coordenadas geodésicas y ECEF de cada receptor GNSS.
 - Centroide del sistema y cálculo de la matriz $C_e^n$.
 - Matriz de covarianza cruzada $H$ y descomposición en valores singulares SVD.
@@ -126,6 +126,6 @@ Al ejecutar la resolución (vía GUI o CLI), se genera un fichero `.txt` con for
 
 ---
 
-## ⚖️ Licencia
+## Licencia
 
 Este proyecto está bajo la licencia **GNU General Public License v3 (GPLv3)**. Consulte el archivo [LICENSE](LICENSE) para más detalles.
