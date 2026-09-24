@@ -1,0 +1,20 @@
+# ==============================================================================
+# PyGSN - OBSERVACIONES DE CAMPO (Práctica 1 - UPV 2026)
+# ==============================================================================
+#
+# 1. COORDENADAS GEODÉSICAS DE RECEPTORES GNSS (ETRS89 / Elipsoide GRS80)
+# Formato: RECEPTOR  LATITUD_DMS                  LONGITUD_DMS                h_elip(m)
+REC2   39 28 53.133637   -0 20 7.650964   55.8670
+REC3   39 28 53.109885   -0 20 7.663129   55.8290
+REC4   39 28 53.143535   -0 20 7.680928   55.8830
+REC5   39 28 53.119474   -0 20 7.693816   55.8660
+
+# 2. ACTITUD OBSERVADA POR EL INS (SBG Ellipse2-N respecto a Norte Magnético)
+# Formato: ROLL(deg)  PITCH(deg)  YAW(deg)
+INS_ACTITUD   1.195278   -1.189671   111.269874
+
+# 3. PARÁMETROS GEODÉSICOS Y GEOMAGNÉTICOS LOCALES
+# Formato: PARÁMETRO  VALOR
+DECLINACION_MAGNETICA_DEG  -0.700
+ONDULACION_GEOIDE_N_M       50.0166
+ELIPSOIDE                   GRS80

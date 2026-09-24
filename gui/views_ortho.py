@@ -13,9 +13,9 @@ from typing import Callable
 import dearpygui.dearpygui as dpg
 import numpy as np
 
-from ..core.models import Platform, Sensor, SensorType
-from ..core.rotations import sensor_to_body_matrix
-from .theme import (
+from core.models import Platform, Sensor, SensorType
+from core.rotations import sensor_to_body_matrix
+from gui.theme import (
     COLOR_CANVAS_BG, COLOR_GRID_MAJOR, COLOR_GRID_MINOR,
     COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z, COLOR_PLATFORM_BODY,
     COLOR_ORIGIN, COLOR_CENTROID, COLOR_SENSOR_GNSS, COLOR_SENSOR_INS,

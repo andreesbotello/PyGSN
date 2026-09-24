@@ -1,0 +1,24 @@
+# ==============================================================================
+# PyGSN - CALIBRACIÓN DE PLATAFORMA Y SENSORES (Práctica 1 - UPV 2026)
+# PLATAFORMA: Plataforma Movil P1 2026 | TIPO: CAR
+# DIMENSIONES: 1.2000 0.8000 0.1000
+#
+# Origen b-frame de referencia: PLA = [0.0, 0.0, 0.0]
+# Coordenadas de los sensores en el sistema de la plataforma (b-frame) en metros:
+# x1: Longitudinal (Adelante)
+# x2: Transversal (Derecha)
+# x3: Vertical (Abajo / Down)
+#
+# Ángulos de montaje (s-frame a b-frame) en grados:
+# alpha (roll), beta (pitch), gamma (yaw)
+#
+# SENSOR   TIPO         X1(m)       X2(m)       X3(m)     ALPHA(deg)   BETA(deg)   GAMMA(deg)  DESCRIPCION
+# ==============================================================================
+PLA        PLATAFORMA    0.0000      0.0000      0.0000     0.000000    0.000000    0.000000  Origen_Plataforma
+INS        INERCIAL      0.0000      0.0000     -0.0250     0.263568   -0.437974    2.869214  SBG_Ellipse2-N
+REC2       RECEPTOR      0.4000     -0.4000     -0.0150     0.000000    0.000000    0.000000  GNSS_Antena_2
+REC3       RECEPTOR      0.4000      0.4000     -0.0150     0.000000    0.000000    0.000000  GNSS_Antena_3
+REC4       RECEPTOR     -0.4000     -0.4000     -0.0150     0.000000    0.000000    0.000000  GNSS_Antena_4
+REC5       RECEPTOR     -0.4000      0.4000     -0.0150     0.000000    0.000000    0.000000  GNSS_Antena_5
+CAM1       CAMARA        0.7000     -0.1500     -0.0800     0.196543    0.541674   -1.355847  Camara_Frontal_Izquierda
+CAM2       CAMARA        0.7000      0.1500     -0.0800    -0.287495    0.426588    1.128792  Camara_Frontal_Derecha

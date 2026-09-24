@@ -18,17 +18,17 @@ El proyecto está diseñado para ejecutarse **de inmediato sin configuración ma
    - *El script detecta Python, crea automáticamente un entorno virtual aislado (`.venv`), instala las dependencias (`numpy`, `scipy`, `dearpygui`) y abre la interfaz gráfica.*
 
 ### Opción B: Evaluación Directa por Terminal (Modo CLI sin GUI)
-Si prefiere evaluar numéricamente los resultados de la **Práctica 1** sin abrir ventanas:
+Si prefiere evaluar numéricamente los resultados sin abrir ventanas gráficas:
 ```bash
-python main.py --p1 --output P1_Resultados_Paso_a_Paso.txt
+python main.py --run --body data/calibracion_vehiculo.txt --output output/Informe_Georreferenciacion.txt
 ```
-*Calcula instantáneamente las transformaciones, la actitud $C_b^n$ por SVD de Kabsch, la propagación a ECEF, Geodésicas y UTM Huso 30 con altitudes ortométricas, y genera el archivo de texto detallado paso a paso listo para entrega.*
+*Calcula instantáneamente las transformaciones, la actitud $C_b^n$ por SVD de Kabsch, la propagación a ECEF, Geodésicas y UTM Huso 30 con altitudes ortométricas, y genera el archivo de texto detallado paso a paso.*
 
 ### Opción C: Ejecución de Tests de Validación Numérica
 ```bash
 python main.py --test
 ```
-*Verifica que las soluciones coinciden exactamente con los datos de referencia oficiales.*
+*Verifica que las soluciones coinciden exactamente con los algoritmos y datos de referencia.*
 
 ---
 
@@ -70,7 +70,7 @@ Siguiendo principios de diseño CAD y dibujo técnico, **no se utiliza renderiza
 - Cuadrícula milimetrada interactiva con líneas secundarias cada 10 cm y principales cada 50 cm.
 - Marcadores de sensores con su código identificativo y triedro cartesiano miniatura RGB reflejando los ángulos de desalineamiento de montaje.
 - Constructor universal: permite modelar vehículos terrestres, drones multirotor, aeronaves o rigs de laboratorio de cualquier dimensión.
-- Guardado y carga de configuraciones de plataforma en formato JSON.
+- Guardado y carga de configuraciones de plataforma tanto en formato JSON como en texto plano `.txt`.
 
 ---
 
@@ -82,17 +82,20 @@ PyGSN/
 │   ├── geodesy.py               # Elipsoides GRS80/WGS84, ECEF <-> Geodésicas, UTM H30
 │   ├── rotations.py             # Matrices DCM, Euler (r,p,y), misalignment, declinación
 │   ├── alignment.py             # Algoritmo de Procrustes Ortogonal (SVD de Kabsch)
-│   ├── models.py                # Clases Sensor y Platform para rigs universales
-│   ├── solver_p1.py             # Orquestador del flujo matemático de la Práctica 1
-│   └── reporting.py             # Generador de informes académicos paso a paso (.txt)
+│   ├── models.py                # Clases Sensor y Platform para rigs universales (.txt / .json)
+│   ├── georeferencing.py        # Motor de georreferenciación y actitud multi-sensor
+│   └── reporting.py             # Generador de informes técnicos paso a paso (.txt)
 ├── gui/                         # Capa de Interfaz Gráfica (DearPyGui)
 │   ├── theme.py                 # Paleta oscura técnica de alto contraste
 │   ├── views_ortho.py           # Lienzo de las 3 vistas ortogonales 2D sobre grid
 │   ├── editor.py                # Panel para dimensionar plataforma y añadir sensores
-│   ├── panel_p1.py              # Panel de control de la Práctica 1 y visor de resultados
+│   ├── panel_georeferencing.py  # Panel de georreferenciación, observaciones y visor TXT
 │   └── app.py                   # Ensamblador del viewport y ventana principal
+├── data/                        # Ficheros de calibración y observaciones de prueba
+│   ├── calibracion_vehiculo.txt # Calibración geométrica del chasis y sensores en b-frame
+│   └── observaciones_sensores.txt # Observaciones geodésicas GNSS e inerciales INS
 ├── tests/                       # Pruebas unitarias de validación cruzada
-│   └── test_p1.py               # Validación frente a soluciones de referencia
+│   └── test_georeferencing.py   # Validación de algoritmos y consistencia numérica
 ├── scripts/
 │   └── build_exe.py             # Script para compilar ejecutable standalone con PyInstaller
 ├── main.py                      # Punto de entrada universal (CLI / GUI / Tests)

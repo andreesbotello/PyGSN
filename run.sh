@@ -2,6 +2,7 @@
 # PyGSN - Lanzador rapido para Linux / macOS
 
 set -e
+cd "$(dirname "$0")"
 
 echo "==============================================================================="
 echo "             PyGSN - Sistema de Transformación de Coordenadas"
@@ -14,14 +15,17 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-if [ ! -d ".venv" ]; then
-    echo "[INFO] Creando entorno virtual aislado (.venv)..."
-    python3 -m venv .venv
-    echo "[INFO] Instalando dependencias de requirements.txt..."
-    .venv/bin/pip install --upgrade pip > /dev/null 2>&1
-    .venv/bin/pip install -r requirements.txt
-    echo "[INFO] Instalación completada."
+if python3 -c "import numpy, scipy, dearpygui" > /dev/null 2>&1; then
+    PYTHON_EXE="python3"
+else
+    if [ ! -f ".venv/bin/python" ]; then
+        echo "[INFO] Configurando entorno virtual (.venv)..."
+        python3 -m venv .venv
+        .venv/bin/pip install --upgrade pip > /dev/null 2>&1
+        .venv/bin/pip install -r requirements.txt
+    fi
+    PYTHON_EXE=".venv/bin/python"
 fi
 
 echo "[INFO] Iniciando PyGSN..."
-.venv/bin/python main.py "$@"
+$PYTHON_EXE main.py "$@"

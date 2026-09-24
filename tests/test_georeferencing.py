@@ -1,8 +1,8 @@
 """
-PyGSN Unit Tests - Practica 1 Validation
-=======================================
-Pruebas unitarias para validar las transformaciones y la resolucion completa
-de la Practica 1 frente a las soluciones oficiales del curso.
+PyGSN Unit Tests - Georeferencing & Navigation Module
+=====================================================
+Pruebas unitarias para validar las transformaciones de coordenadas,
+el problema de Procrustes ortogonal (Kabsch SVD) y la actitud multi-sensor.
 """
 
 import unittest
@@ -14,13 +14,13 @@ from core.rotations import (
     magnetic_to_geodetic_north_matrix, e_to_n_matrix
 )
 from core.alignment import kabsch_orthogonal_procrustes
-from core.solver_p1 import create_default_p1_platform, solve_practica_1
+from core.georeferencing import create_reference_platform, solve_multisensor_georeferencing
 
 
-class TestPractica1(unittest.TestCase):
+class TestGeoreferencing(unittest.TestCase):
 
     def setUp(self):
-        self.platform = create_default_p1_platform()
+        self.platform = create_reference_platform()
         self.gnss_obs = {
             "REC2": (dms_to_rad(39, 28, 53.133637, 1), dms_to_rad(0, 20, 7.650964, -1), np.float64(55.8670)),
             "REC3": (dms_to_rad(39, 28, 53.109885, 1), dms_to_rad(0, 20, 7.663129, -1), np.float64(55.8290)),
@@ -55,9 +55,9 @@ class TestPractica1(unittest.TestCase):
         self.assertAlmostEqual(float(p_in), float(p_out), places=9)
         self.assertAlmostEqual(float(y_in), float(y_out), places=9)
 
-    def test_p1_complete_solution(self):
-        """Validar resultados de la Practica 1 frente a valores de referencia 2025."""
-        sol = solve_practica_1(
+    def test_multisensor_georeferencing_solution(self):
+        """Validar determinacion de actitud y coordenadas propagadas."""
+        sol = solve_multisensor_georeferencing(
             platform=self.platform,
             gnss_observations=self.gnss_obs,
             ins_attitude_deg=self.ins_attitude,
@@ -72,20 +72,18 @@ class TestPractica1(unittest.TestCase):
         self.assertAlmostEqual(yaw_g, 112.2746609, places=5)
 
         # 2. Origen PLA en ECEF
-        # 2025: X=4929476.0865, Y=-28862.2158, Z=4033747.4246
         self.assertAlmostEqual(sol.pla_origin_ecef[0], 4929476.0865, delta=0.001)
         self.assertAlmostEqual(sol.pla_origin_ecef[1], -28862.2158, delta=0.001)
         self.assertAlmostEqual(sol.pla_origin_ecef[2], 4033747.4246, delta=0.001)
 
         # 3. Actitud total con INS
-        # 2025: Roll=1.3758265 deg, Pitch=-1.6984938 deg, Yaw=114.8282640 deg
         r_ins_tot, p_ins_tot, y_ins_tot = sol.attitude_ins_total_deg
         self.assertAlmostEqual(r_ins_tot, 1.3758265, places=5)
         self.assertAlmostEqual(p_ins_tot, -1.6984938, places=5)
         self.assertAlmostEqual(y_ins_tot, 114.8282640, places=5)
 
-        # 4. Residuales 2a vs 2b (REC2 dE ~ -0.0098, dN ~ +0.0229)
-        dE_rec2, dN_rec2, dH_rec2 = sol.diff_2a_2b_utm["REC2"]
+        # 4. Residuales GNSS vs INS
+        dE_rec2, dN_rec2, dH_rec2 = sol.diff_gnss_ins_utm["REC2"]
         self.assertAlmostEqual(dE_rec2, -0.0098, delta=0.0005)
         self.assertAlmostEqual(dN_rec2, 0.0229, delta=0.0005)
 

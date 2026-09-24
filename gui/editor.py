@@ -9,8 +9,8 @@ from typing import Callable
 import dearpygui.dearpygui as dpg
 import numpy as np
 
-from ..core.models import Platform, Sensor, SensorType
-from ..core.solver_p1 import create_default_p1_platform
+from core.models import Platform, Sensor, SensorType
+from core.georeferencing import create_reference_platform
 
 
 class PlatformEditor:
@@ -29,6 +29,11 @@ class PlatformEditor:
                 dpg.add_button(label="Cargar Rig P1 (2026)", callback=self._cb_preset_p1)
                 dpg.add_button(label="Preset Dron X4", callback=self._cb_preset_drone)
                 dpg.add_button(label="Limpiar Todo", callback=self._cb_clear)
+
+            with dpg.group(horizontal=True):
+                dpg.add_input_text(default_value="data/calibracion_p1.txt", width=190, tag="input_body_txt_path")
+                dpg.add_button(label="📂 Cargar TXT", callback=self._cb_load_txt)
+                dpg.add_button(label="💾 Guardar TXT", callback=self._cb_save_txt)
 
             dpg.add_spacer(height=5)
             dpg.add_input_text(label="Nombre del Chasis", default_value=self.platform.name,
@@ -152,7 +157,7 @@ class PlatformEditor:
         self.on_update()
 
     def _cb_preset_p1(self):
-        default_p1 = create_default_p1_platform()
+        default_p1 = create_reference_platform()
         self.platform.name = default_p1.name
         self.platform.length_m = default_p1.length_m
         self.platform.width_m = default_p1.width_m
@@ -187,3 +192,32 @@ class PlatformEditor:
         self.platform.add_sensor(Sensor("PLA", "Origen", SensorType.PLATFORM_ORIGIN, np.zeros(3)))
         self.rebuild_sensor_list()
         self.on_update()
+
+    def _cb_load_txt(self):
+        from pathlib import Path
+        path_str = dpg.get_value("input_body_txt_path").strip()
+        p = Path(path_str)
+        if p.exists():
+            content = p.read_text(encoding="utf-8")
+            loaded = Platform.from_txt(content)
+            self.platform.name = loaded.name
+            self.platform.length_m = loaded.length_m
+            self.platform.width_m = loaded.width_m
+            self.platform.height_m = loaded.height_m
+            self.platform.sensors = loaded.sensors
+            dpg.set_value("input_plat_name", self.platform.name)
+            dpg.set_value("drag_plat_l", self.platform.length_m)
+            dpg.set_value("drag_plat_w", self.platform.width_m)
+            dpg.set_value("drag_plat_h", self.platform.height_m)
+            self.rebuild_sensor_list()
+            self.on_update()
+
+    def _cb_save_txt(self):
+        from pathlib import Path
+        path_str = dpg.get_value("input_body_txt_path").strip()
+        if not path_str:
+            path_str = "data/mi_plataforma.txt"
+        p = Path(path_str)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(self.platform.to_txt(), encoding="utf-8")
+

@@ -1,7 +1,8 @@
 @echo off
+cd /d "%~dp0"
 setlocal enabledelayedexpansion
 
-title PyGSN - Guiado, Sensores y Navegacion [UPV 2026]
+title PyGSN - Guiado, Sensores y Navegacion [UPV]
 
 echo ===============================================================================
 echo              PyGSN - Sistema de Transformacion de Coordenadas
@@ -14,40 +15,41 @@ where python >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERROR] No se ha encontrado Python en el sistema.
     echo Por favor, instale Python 3.10 o superior desde https://www.python.org/
-    echo y asegurese de marcar la casilla "Add python.exe to PATH".
+    echo y marque la casilla "Add python.exe to PATH".
     echo.
     pause
     exit /b 1
 )
 
-:: 2. Crear entorno virtual aislado si no existe
-if not exist ".venv" (
-    echo [INFO] Creando entorno virtual aislado (.venv) para no alterar su sistema...
+:: 2. Verificar si el Python del sistema ya cuenta con las dependencias
+python -c "import numpy, scipy, dearpygui" >nul 2>nul
+if %errorlevel% equ 0 (
+    set "PYTHON_EXE=python"
+    goto :RUN_APP
+)
+
+:: 3. Si no estan globales, usar/crear entorno virtual aislado (.venv)
+if not exist ".venv\Scripts\python.exe" (
+    echo [INFO] Configurando entorno virtual (.venv) e instalando dependencias...
     python -m venv .venv
-    if %errorlevel% neq 0 (
-        echo [ERROR] Fallo al crear el entorno virtual.
-        pause
-        exit /b 1
-    )
-    echo [INFO] Entorno virtual creado exitosamente.
-    echo [INFO] Instalando dependencias de requirements.txt (NumPy, SciPy, DearPyGui)...
     .venv\Scripts\python -m pip install --upgrade pip >nul 2>nul
     .venv\Scripts\pip install -r requirements.txt
     if %errorlevel% neq 0 (
-        echo [ERROR] Fallo en la instalacion de dependencias.
+        echo [ERROR] Fallo al instalar las dependencias en .venv.
         pause
         exit /b 1
     )
-    echo [INFO] Instalacion completada con exito.
+    echo [INFO] Entorno virtual preparado con exito.
     echo.
 )
+set "PYTHON_EXE=.venv\Scripts\python"
 
-:: 3. Ejecutar PyGSN
-echo [INFO] Iniciando aplicacion PyGSN...
-.venv\Scripts\python main.py %*
+:RUN_APP
+echo [INFO] Iniciando PyGSN...
+%PYTHON_EXE% main.py %*
 
 if %errorlevel% neq 0 (
     echo.
-    echo [AVISO] La aplicacion ha finalizado con codigo de salida %errorlevel%.
+    echo [ERROR] La aplicacion ha finalizado con codigo de error %errorlevel%.
     pause
 )

@@ -7,7 +7,7 @@ para la entrega academica de la Practica 1 (Georreferenciacion de Sensores y Nav
 
 from datetime import datetime
 import numpy as np
-from .solver_p1 import P1Solution
+from .georeferencing import GeoreferencingSolution
 from .geodesy import rad_to_dms, radii_of_curvature
 
 
@@ -18,30 +18,32 @@ def format_matrix_3x3(M: np.ndarray, indent: str = "   ") -> str:
     return "\n".join(lines)
 
 
-def generate_p1_full_txt_report(
-    sol: P1Solution,
-    student_name: str = "Bryan Andres Botello",
-    student_id: str = "GSN-2026",
-    group: str = "S3-UPV"
+def generate_georeferencing_report(
+    sol: GeoreferencingSolution,
+    author: str = "Bryan Andres Botello",
+    project: str = "Sistemas de Navegación (S3) - UPV",
+    doc_id: str = "PyGSN-GEOREF-2026",
+    title: str = "INFORME TÉCNICO DE GEORREFERENCIACIÓN Y TRANSFORMACIÓN MULTISENSOR"
 ) -> str:
     """
-    Genera el informe de texto completo paso a paso que cubre Punto 1, Punto 2a y Punto 2b.
+    Genera el informe técnico de procesamiento paso a paso para georreferenciación
+    y determinación de actitud de plataforma multisensor.
     """
     now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     ell = sol.ellipsoid
 
     doc = []
     doc.append("=" * 90)
-    doc.append("UNIVERSITAT POLITÈCNICA DE VALÈNCIA - MÁSTER EN GEOMÁTICA Y NAVEGACIÓN")
-    doc.append("SISTEMAS DE NAVEGACIÓN (S3) - GEORREFERENCIACIÓN DE SENSORES")
-    doc.append("PRÁCTICA 1: TRANSFORMACIÓN DE SISTEMAS DE COORDENADAS Y GEORREFERENCIACIÓN DE SENSORES")
+    doc.append("PyGSN - SISTEMA DE GEORREFERENCIACIÓN Y TRANSFORMACIÓN DE COORDENADAS")
+    doc.append(f"PROYECTO: {project.upper()}")
+    doc.append(f"{title.upper()}")
     doc.append("=" * 90)
-    doc.append(f"Estudiante: {student_name}")
-    doc.append(f"ID / Grupo: {student_id} | {group}")
-    doc.append(f"Fecha de Ejecución: {now_str}")
-    doc.append(f"Elipsoide de Referencia: {ell.name} (a = {ell.a:.4f} m, 1/f = {ell.inv_f:.12f})")
-    doc.append(f"Ondulación del Geoide (N): {sol.geoid_undulation_N:.4f} m")
-    doc.append(f"Declinación Magnética: {sol.magnetic_declination_deg:+.4f} deg")
+    doc.append(f"Autor / Ingeniero: {author}")
+    doc.append(f"Referencia / ID:   {doc_id}")
+    doc.append(f"Fecha de Cálculo:  {now_str}")
+    doc.append(f"Elipsoide:         {ell.name} (a = {ell.a:.4f} m, 1/f = {ell.inv_f:.12f})")
+    doc.append(f"Ondulación Geoide: N = {sol.geoid_undulation_N:.4f} m")
+    doc.append(f"Declinación Mag.:  δ = {sol.magnetic_declination_deg:+.4f} deg")
     doc.append("-" * 90)
     doc.append("")
 
@@ -199,3 +201,7 @@ def generate_p1_full_txt_report(
     doc.append("=" * 90)
 
     return "\n".join(doc)
+
+
+# Alias de compatibilidad
+generate_p1_full_txt_report = generate_georeferencing_report

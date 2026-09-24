@@ -112,3 +112,128 @@ class Platform:
     @classmethod
     def from_json(cls, json_str: str) -> "Platform":
         return cls.from_dict(json.loads(json_str))
+
+    def to_txt(self) -> str:
+        """Serializa la plataforma y sus sensores a un archivo de texto .txt legible."""
+        lines = [
+            "# ==============================================================================",
+            "# PyGSN - DEFINICIÓN DE PLATAFORMA Y SENSORES (b-frame)",
+            f"# PLATAFORMA: {self.name} | TIPO: {self.platform_type}",
+            f"# DIMENSIONES (Largo Ancho Alto): {self.length_m:.4f} {self.width_m:.4f} {self.height_m:.4f}",
+            "# Origen b-frame de referencia: [0, 0, 0] (Plataforma)",
+            "#",
+            "# Formato de columnas:",
+            "# SENSOR   TIPO         X1(m)       X2(m)       X3(m)     ALPHA(deg)   BETA(deg)   GAMMA(deg)  NOMBRE",
+            "# =============================================================================="
+        ]
+        type_names = {
+            SensorType.PLATFORM_ORIGIN: "PLATAFORMA",
+            SensorType.INS: "INERCIAL",
+            SensorType.GNSS: "RECEPTOR",
+            SensorType.CAMERA: "CAMARA",
+            SensorType.LIDAR: "LIDAR",
+            SensorType.ODOMETER: "ODOMETRO",
+            SensorType.OTHER: "OTRO"
+        }
+        for code, s in self.sensors.items():
+            t_str = type_names.get(s.sensor_type, "OTRO")
+            x1, x2, x3 = s.lever_arm_b
+            a, b, c = s.boresight_deg
+            name_clean = s.name.replace(" ", "_")
+            lines.append(f"{code:<8s} {t_str:<12s} {x1:10.4f} {x2:10.4f} {x3:10.4f}  {a:11.6f} {b:11.6f} {c:11.6f}  {name_clean}")
+        return "\n".join(lines) + "\n"
+
+    @classmethod
+    def from_txt(cls, txt_content: str) -> "Platform":
+        """
+        Carga una plataforma y sus sensores desde un archivo de texto .txt.
+        Ignora lineas de comentarios (#) y lineas vacias.
+        """
+        plat = cls(name="Plataforma desde TXT")
+        type_map = {
+            "PLATAFORMA": SensorType.PLATFORM_ORIGIN,
+            "ORIGEN": SensorType.PLATFORM_ORIGIN,
+            "CHASIS": SensorType.PLATFORM_ORIGIN,
+            "BODY": SensorType.PLATFORM_ORIGIN,
+            "INERCIAL": SensorType.INS,
+            "INS": SensorType.INS,
+            "IMU": SensorType.INS,
+            "RECEPTOR": SensorType.GNSS,
+            "GNSS": SensorType.GNSS,
+            "GPS": SensorType.GNSS,
+            "CAMARA": SensorType.CAMERA,
+            "CAM": SensorType.CAMERA,
+            "CAMERA": SensorType.CAMERA,
+            "LIDAR": SensorType.LIDAR,
+            "ODOMETRO": SensorType.ODOMETER,
+            "ODOMETER": SensorType.ODOMETER,
+            "OTRO": SensorType.OTHER,
+            "OTHER": SensorType.OTHER
+        }
+
+        for line in txt_content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+
+            # Parsear metadatos de comentarios
+            if line.startswith("#"):
+                upper = line.upper()
+                if "PLATAFORMA:" in upper:
+                    try:
+                        part = line.split("PLATAFORMA:")[1].split("|")[0].strip()
+                        if part:
+                            plat.name = part
+                    except Exception:
+                        pass
+                if "DIMENSIONES" in upper:
+                    try:
+                        vals = [float(v) for v in line.split(":")[-1].strip().split()]
+                        if len(vals) >= 3:
+                            plat.length_m, plat.width_m, plat.height_m = vals[0], vals[1], vals[2]
+                    except Exception:
+                        pass
+                continue
+
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+
+            # Formato esperado:
+            # 1: code
+            # 2: tipo
+            # 3, 4, 5: x1, x2, x3
+            # 6, 7, 8: alpha, beta, gamma (opcional)
+            # 9: nombre (opcional)
+            code = parts[0].upper()
+            tipo_raw = parts[1].upper()
+            stype = type_map.get(tipo_raw, SensorType.OTHER)
+
+            try:
+                x1 = float(parts[2])
+                x2 = float(parts[3])
+                x3 = float(parts[4])
+                arm = np.array([x1, x2, x3], dtype=np.float64)
+
+                alpha, beta, gamma = 0.0, 0.0, 0.0
+                name = code
+                if len(parts) >= 8:
+                    alpha = float(parts[5])
+                    beta = float(parts[6])
+                    gamma = float(parts[7])
+                if len(parts) >= 9:
+                    name = parts[8].replace("_", " ")
+
+                plat.add_sensor(Sensor(
+                    code=code,
+                    name=name,
+                    sensor_type=stype,
+                    lever_arm_b=arm,
+                    boresight_deg=(alpha, beta, gamma)
+                ))
+            except ValueError:
+                # Linea de cabecera no comentada
+                continue
+
+        return plat
+

@@ -9,21 +9,21 @@ Punto de union de la interfaz grafica:
 
 import dearpygui.dearpygui as dpg
 
-from ..core.solver_p1 import create_default_p1_platform
-from .theme import apply_pygsn_theme
-from .views_ortho import OrthoViewCanvas
-from .editor import PlatformEditor
-from .panel_p1 import Practica1Panel
+from core.georeferencing import create_reference_platform
+from gui.theme import apply_pygsn_theme
+from gui.views_ortho import OrthoViewCanvas
+from gui.editor import PlatformEditor
+from gui.panel_georeferencing import GeoreferencingPanel
 
 
 class PyGSNApp:
     """Aplicacion principal DearPyGui para PyGSN."""
 
     def __init__(self):
-        self.platform = create_default_p1_platform()
+        self.platform = create_reference_platform()
         self.canvas: OrthoViewCanvas | None = None
         self.editor: PlatformEditor | None = None
-        self.panel_p1: Practica1Panel | None = None
+        self.panel_georef: GeoreferencingPanel | None = None
 
     def on_platform_changed(self):
         """Callback ejecutado cuando se modifica la geometria o sensores de la plataforma."""
@@ -41,7 +41,7 @@ class PyGSNApp:
 
         self.canvas = OrthoViewCanvas(self.platform)
         self.editor = PlatformEditor(self.platform, on_update_callback=self.on_platform_changed)
-        self.panel_p1 = Practica1Panel(self.platform)
+        self.panel_georef = GeoreferencingPanel(self.platform)
 
         with dpg.window(label="PyGSN Workspace", tag="main_window", no_title_bar=True, no_move=True):
             # Barra de navegacion superior
@@ -57,11 +57,11 @@ class PyGSNApp:
                 # COLUMNA IZQUIERDA: Paneles de Control y Datos (ancho ~530 px)
                 with dpg.child_window(width=530, height=-1, border=True):
                     with dpg.tab_bar():
-                        with dpg.tab(label="Práctica 1 (2026)"):
-                            self.panel_p1.build_ui("child_p1_tab")
+                        with dpg.tab(label="Georreferenciación & Navegación", tag="tab_georef"):
+                            self.panel_georef.build_ui("tab_georef")
 
-                        with dpg.tab(label="Constructor de Plataformas (Rig)"):
-                            self.editor.build_ui("child_editor_tab")
+                        with dpg.tab(label="Modelado de Plataforma (Rig)", tag="tab_editor"):
+                            self.editor.build_ui("tab_editor")
 
                         with dpg.tab(label="Ayuda & Metodología"):
                             dpg.add_text("Metodología de Trabajo GSN (UPV)", color=(0, 180, 216, 255))
