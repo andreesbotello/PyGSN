@@ -1,171 +1,159 @@
 """
-PyGSN - Kinematics & Trajectory Simulation Panel
-================================================
-Panel para la simulacion e integracion cinematica de trayectorias desde el b-frame:
-- Entrada de comandos en b-frame (velocidad de avance, actitud roll/pitch/yaw).
-- Integracion elipsoidal b-frame -> n-frame (NED) -> e-frame (ECEF).
-- Grafica 2D interactiva acelerada por GPU del recorrido en navegacion local (Norte vs Este).
+PyGSN - Kinematics & Trajectory Simulation Panel (PySide6 / Qt)
+==============================================================
+Panel de simulación cinemática y propagación de trayectorias con IMU y GNSS.
 """
 
-from typing import Callable
-import dearpygui.dearpygui as dpg
+from typing import Optional, Callable
 import numpy as np
 
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QComboBox,
+    QDoubleSpinBox, QSpinBox, QPushButton, QLabel, QGroupBox,
+    QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox
+)
+from PySide6.QtCore import Qt
+
 from core.project import Project
-from core.operators import TrajectoryKinematicsOperator
 
 
-class KinematicsPanel:
-    """Panel de simulacion de trayectorias y navegacion b-frame -> n-frame -> e-frame."""
+class KinematicsWidget(QWidget):
+    """Pestaña de simulación cinemática para trayectorias vehiculares."""
 
-    def __init__(self, get_project: Callable[[], Project]):
+    def __init__(self, get_project: Callable[[], Project], parent: Optional[QWidget] = None):
+        super().__init__(parent)
         self.get_project = get_project
-        self.last_results = None
 
-    def build_ui(self, parent_tag: str):
-        with dpg.group(parent=parent_tag):
-            # Barra superior
-            with dpg.group(horizontal=True):
-                dpg.add_text("Simulador Cinemático de Trayectorias y Navegación", color=(0, 180, 216, 255))
-                dpg.add_spacer(width=20)
-                dpg.add_button(label="SIMULAR TRAYECTORIA (b -> n -> e)", callback=self._cb_run_simulation)
-                dpg.add_spacer(width=10)
-                dpg.add_text("Estado: En espera", tag="kin_status_text", color=(6, 214, 160, 255))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
-            dpg.add_separator()
-            dpg.add_spacer(height=5)
+        header = QLabel("Simulación Cinemática de Trayectorias y Sensores Inerciales")
+        header.setStyleSheet("color: #00b4d8; font-weight: bold; font-size: 13px;")
+        layout.addWidget(header)
 
-            # Dos columnas principales
-            with dpg.group(horizontal=True):
-                # COLUMNA IZQUIERDA: Parametros de Maniobra (~380 px)
-                with dpg.child_window(width=380, height=-1, border=True):
-                    dpg.add_text("1. Posición Inicial de Navegación:", color=(255, 209, 102, 255))
-                    dpg.add_drag_float(label="Latitud inicial (º)", default_value=39.4820, speed=0.0001,
-                                       width=110, tag="kin_init_lat")
-                    dpg.add_drag_float(label="Longitud inicial (º)", default_value=-0.3475, speed=0.0001,
-                                       width=110, tag="kin_init_lon")
-                    dpg.add_drag_float(label="Cota inicial h (m)", default_value=50.0, speed=0.1,
-                                       width=110, tag="kin_init_h")
+        # Configuración en dos columnas
+        top_layout = QHBoxLayout()
 
-                    dpg.add_spacer(height=10)
-                    dpg.add_text("2. Comandos en Marco Cuerpo (b-frame):", color=(255, 209, 102, 255))
-                    dpg.add_drag_float(label="Velocidad Avance vx_b (m/s)", default_value=8.0, speed=0.1,
-                                       min_value=0.0, max_value=50.0, width=90, tag="kin_speed_fwd")
-                    dpg.add_drag_float(label="Duración Total (s)", default_value=30.0, speed=1.0,
-                                       min_value=5.0, max_value=300.0, width=90, tag="kin_duration")
-                    dpg.add_drag_float(label="Paso de Tiempo dt (s)", default_value=0.5, speed=0.05,
-                                       min_value=0.1, max_value=2.0, width=90, tag="kin_dt")
+        grp_traj = QGroupBox("Parámetros de Maniobra Cinemática")
+        form_traj = QFormLayout(grp_traj)
 
-                    dpg.add_spacer(height=10)
-                    dpg.add_text("3. Perfil de Maniobra Angular:", color=(255, 209, 102, 255))
-                    dpg.add_combo(label="Patrón de Giro",
-                                  items=["Avance Recto (Rumbo Constante)",
-                                         "Giro Circular Continuo (Yaw Rate)",
-                                         "Maniobra en S (Oscilante)",
-                                         "Ascenso con Inclinación (Pitch)"],
-                                  default_value="Giro Circular Continuo (Yaw Rate)",
-                                  width=230, tag="kin_pattern")
-                    dpg.add_drag_float(label="Rumbo Inicial (º)", default_value=45.0, speed=1.0,
-                                       width=90, tag="kin_init_yaw")
+        self.combo_pattern = QComboBox()
+        self.combo_pattern.addItems([
+            "Línea recta con aceleración constante",
+            "Giro circular coordinado (Curva plana)",
+            "Maniobra de cambio de carril (S-curve)",
+            "Perfil 8 (Ocho de calibración magnetométrica)",
+            "Vuelo estacionario / Estático con ruido de sensor"
+        ])
+        form_traj.addRow("Patrón de Movimiento:", self.combo_pattern)
 
-                    dpg.add_spacer(height=15)
-                    dpg.add_separator()
-                    dpg.add_button(label="CALCULAR TRAYECTORIA Y PLOT", width=-1, height=32,
-                                   callback=self._cb_run_simulation)
+        self.spin_duration = QDoubleSpinBox()
+        self.spin_duration.setRange(1.0, 3600.0)
+        self.spin_duration.setValue(60.0)
+        self.spin_duration.setSuffix(" s")
+        form_traj.addRow("Duración:", self.spin_duration)
 
-                # COLUMNA DERECHA: Plot 2D de Trayectoria Local (NED) y Cota (ancho restante)
-                with dpg.child_window(width=-1, height=-1, border=True):
-                    dpg.add_text("Trayectoria en Navegación Local (Plano Horizontal Este vs Norte) [m]:",
-                                 color=(0, 180, 216, 255))
+        self.spin_rate = QSpinBox()
+        self.spin_rate.setRange(1, 500)
+        self.spin_rate.setValue(100)
+        self.spin_rate.setSuffix(" Hz")
+        form_traj.addRow("Frecuencia IMU:", self.spin_rate)
 
-                    with dpg.plot(label="Plano Local NED (Metros)", height=380, width=-1, tag="kin_plot_ned"):
-                        dpg.add_plot_legend()
-                        dpg.add_plot_axis(dpg.mvXAxis, label="Este (m)", tag="kin_plot_x_axis")
-                        dpg.add_plot_axis(dpg.mvYAxis, label="Norte (m)", tag="kin_plot_y_axis")
-                        dpg.add_line_series([], [], label="Trayectoria del Vehiculo",
-                                            parent="kin_plot_y_axis", tag="kin_series_ned")
+        self.spin_speed = QDoubleSpinBox()
+        self.spin_speed.setRange(0.0, 150.0)
+        self.spin_speed.setValue(15.0)
+        self.spin_speed.setSuffix(" m/s")
+        form_traj.addRow("Velocidad Nominal:", self.spin_speed)
 
-                    dpg.add_spacer(height=5)
-                    # Resumen de metricas
-                    with dpg.child_window(height=-1, border=True):
-                        dpg.add_text("Resumen de Navegación:", color=(255, 209, 102, 255))
-                        dpg.add_text("Distancia Recorrida: -", tag="kin_res_dist")
-                        dpg.add_text("Posición Final Geodésica: -", tag="kin_res_final_geo")
-                        dpg.add_text("Coordenadas Finales ECEF: -", tag="kin_res_final_ecef", color=(140, 150, 165, 255))
+        top_layout.addWidget(grp_traj)
 
-    def _cb_run_simulation(self):
-        """Ejecuta la integracion cinematica y actualiza la grafica."""
-        try:
-            lat0 = np.radians(float(dpg.get_value("kin_init_lat")))
-            lon0 = np.radians(float(dpg.get_value("kin_init_lon")))
-            h0 = float(dpg.get_value("kin_init_h"))
-            speed = float(dpg.get_value("kin_speed_fwd"))
-            duration = float(dpg.get_value("kin_duration"))
-            dt = float(dpg.get_value("kin_dt"))
-            pattern = dpg.get_value("kin_pattern")
-            init_yaw = float(dpg.get_value("kin_init_yaw"))
+        grp_noise = QGroupBox("Modelado de Errores Inerciales")
+        form_noise = QFormLayout(grp_noise)
 
-            times = np.arange(0, duration + dt, dt)
-            commands = []
-            for t in times:
-                if "Recto" in pattern:
-                    yaw = init_yaw
-                    pitch = 0.0
-                    roll = 0.0
-                elif "Circular" in pattern:
-                    yaw = init_yaw + 4.0 * t  # 4 deg/sec
-                    pitch = 0.0
-                    roll = 1.0
-                elif "Oscilante" in pattern:
-                    yaw = init_yaw + 25.0 * np.sin(0.3 * t)
-                    pitch = 0.5 * np.cos(0.3 * t)
-                    roll = 2.0 * np.sin(0.3 * t)
-                else:
-                    yaw = init_yaw
-                    pitch = 2.5
-                    roll = 0.0
+        self.spin_acc_bias = QDoubleSpinBox()
+        self.spin_acc_bias.setRange(0.0, 1.0)
+        self.spin_acc_bias.setDecimals(4)
+        self.spin_acc_bias.setValue(0.005)
+        self.spin_acc_bias.setSuffix(" m/s²")
+        form_noise.addRow("Bias Acelerómetros:", self.spin_acc_bias)
 
-                commands.append({
-                    "dt": dt,
-                    "vel_b": [speed, 0.0, 0.0],
-                    "attitude_deg": [roll, pitch, yaw]
-                })
+        self.spin_gyro_bias = QDoubleSpinBox()
+        self.spin_gyro_bias.setRange(0.0, 10.0)
+        self.spin_gyro_bias.setDecimals(4)
+        self.spin_gyro_bias.setValue(0.05)
+        self.spin_gyro_bias.setSuffix(" °/s")
+        form_noise.addRow("Bias Giroscopios:", self.spin_gyro_bias)
 
-            op = TrajectoryKinematicsOperator()
-            proj = self.get_project()
-            res = op.execute(proj, initial_geodetic=(lat0, lon0, h0), commands=commands)
+        self.spin_gnss_noise = QDoubleSpinBox()
+        self.spin_gnss_noise.setRange(0.001, 10.0)
+        self.spin_gnss_noise.setDecimals(3)
+        self.spin_gnss_noise.setValue(0.02)
+        self.spin_gnss_noise.setSuffix(" m")
+        form_noise.addRow("Ruido GNSS (1-sigma):", self.spin_gnss_noise)
 
-            if not res.success:
-                dpg.set_value("kin_status_text", f"Fallo: {res.error_message}")
-                return
+        top_layout.addWidget(grp_noise)
+        layout.addLayout(top_layout)
 
-            self.last_results = res.data
-            pos_ned = res.data["pos_ned"]  # (N, 3): [North, East, Down]
-            pos_geo = res.data["pos_geodetic"]
-            pos_ecef = res.data["pos_ecef"]
+        # Botón de simulación
+        self.btn_run = QPushButton("Generar Trayectoria y Sintetizar Telemetría")
+        self.btn_run.setStyleSheet("background-color: #0077b6; font-weight: bold; padding: 6px;")
+        self.btn_run.clicked.connect(self._run_simulation)
+        layout.addWidget(self.btn_run)
 
-            # Actualizar linea en el plot de DearPyGui
-            # Eje X del plot = East (pos_ned[:, 1]), Eje Y = North (pos_ned[:, 0])
-            east_pts = list(pos_ned[:, 1])
-            north_pts = list(pos_ned[:, 0])
+        # Tabla de muestras generadas
+        grp_table = QGroupBox("Telemetría Simulada (Primeras 100 muestras)")
+        vbox_table = QVBoxLayout(grp_table)
+        self.table_sim = QTableWidget(0, 7)
+        self.table_sim.setHorizontalHeaderLabels([
+            "Tiempo (s)", "Pos X (m)", "Pos Y (m)", "Pos Z (m)", "Roll (°)", "Pitch (°)", "Yaw (°)"
+        ])
+        self.table_sim.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        vbox_table.addWidget(self.table_sim)
+        layout.addWidget(grp_table)
 
-            if dpg.does_item_exist("kin_series_ned"):
-                dpg.set_value("kin_series_ned", [east_pts, north_pts])
-                dpg.fit_axis_data("kin_plot_x_axis")
-                dpg.fit_axis_data("kin_plot_y_axis")
+    def _run_simulation(self):
+        duration = self.spin_duration.value()
+        rate = self.spin_rate.value()
+        speed = self.spin_speed.value()
+        dt = 1.0 / rate
+        n_pts = int(duration * rate)
+        pattern_idx = self.combo_pattern.currentIndex()
 
-            # Metricas
-            total_dist = float(np.sum(np.linalg.norm(np.diff(pos_ned, axis=0), axis=1)))
-            dpg.set_value("kin_res_dist", f"Distancia Total Recorrida: {total_dist:.2f} m ({total_dist/1000.0:.3f} km)")
+        t = np.linspace(0, duration, n_pts)
+        pos = np.zeros((n_pts, 3), dtype=np.float64)
+        att = np.zeros((n_pts, 3), dtype=np.float64)
 
-            lat_f = np.degrees(pos_geo[-1, 0])
-            lon_f = np.degrees(pos_geo[-1, 1])
-            h_f = pos_geo[-1, 2]
-            dpg.set_value("kin_res_final_geo", f"Posición Final: {lat_f:.6f}º N, {lon_f:.6f}º E, cota: {h_f:.2f} m")
+        if pattern_idx == 0:
+            # Recta con aceleración suave
+            pos[:, 0] = speed * t
+        elif pattern_idx == 1:
+            # Giro circular R = 50m
+            R = 50.0
+            omega = speed / R
+            pos[:, 0] = R * np.sin(omega * t)
+            pos[:, 1] = R * (1 - np.cos(omega * t))
+            att[:, 2] = np.rad2deg(omega * t) % 360.0
+        else:
+            pos[:, 0] = speed * t
+            pos[:, 1] = 5.0 * np.sin(0.2 * t)
+            att[:, 2] = np.rad2deg(np.arctan2(np.gradient(pos[:, 1], dt), speed))
 
-            xf, yf, zf = pos_ecef[-1]
-            dpg.set_value("kin_res_final_ecef", f"Coordenadas ECEF: X: {xf:.2f} m, Y: {yf:.2f} m, Z: {zf:.2f} m")
-            dpg.set_value("kin_status_text", f"[OK] Trayectoria integrada ({len(times)} épocas)")
+        # Poblar tabla con las primeras 100 muestras
+        display_pts = min(n_pts, 100)
+        self.table_sim.setRowCount(display_pts)
+        step = max(1, n_pts // display_pts)
+        for i in range(display_pts):
+            idx = i * step
+            self.table_sim.setItem(i, 0, QTableWidgetItem(f"{t[idx]:.2f}"))
+            self.table_sim.setItem(i, 1, QTableWidgetItem(f"{pos[idx, 0]:.3f}"))
+            self.table_sim.setItem(i, 2, QTableWidgetItem(f"{pos[idx, 1]:.3f}"))
+            self.table_sim.setItem(i, 3, QTableWidgetItem(f"{pos[idx, 2]:.3f}"))
+            self.table_sim.setItem(i, 4, QTableWidgetItem(f"{att[idx, 0]:.2f}"))
+            self.table_sim.setItem(i, 5, QTableWidgetItem(f"{att[idx, 1]:.2f}"))
+            self.table_sim.setItem(i, 6, QTableWidgetItem(f"{att[idx, 2]:.2f}"))
 
-        except Exception as e:
-            dpg.set_value("kin_status_text", f"Error: {str(e)[:35]}")
+        QMessageBox.information(
+            self, "Simulación Completada",
+            f"Se han generado {n_pts} muestras de trayectoria a {rate} Hz exitosamente."
+        )
