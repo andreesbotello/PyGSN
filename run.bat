@@ -22,7 +22,7 @@ if %errorlevel% neq 0 (
 )
 
 :: 2. Verificar si el Python del sistema ya cuenta con las dependencias
-python -c "import numpy, scipy, dearpygui" >nul 2>nul
+python -c "import numpy, scipy, PySide6" >nul 2>nul
 if %errorlevel% equ 0 (
     set "PYTHON_EXE=python"
     goto :RUN_APP

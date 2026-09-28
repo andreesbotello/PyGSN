@@ -1,73 +1,71 @@
 """
-PyGSN - Technical Report Viewer Panel
-=====================================
-Visor dedicado de informe tecnico paso a paso:
-- Ocupa todo el alto y ancho del workspace con tipografia monoespaciada legible.
-- Exportacion directa a fichero .txt y copia al portapapeles del sistema.
+PyGSN - Technical Report Viewer Panel (PySide6 / Qt)
+====================================================
+Visor de informes técnicos de georreferenciación y navegación paso a paso.
 """
 
+from typing import Optional
 from pathlib import Path
-from typing import Callable
-import dearpygui.dearpygui as dpg
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
+    QFileDialog, QMessageBox, QLabel
+)
+from PySide6.QtCore import Qt
 
 
-class ReportViewerPanel:
-    """Panel visor y exportador de informes tecnicos paso a paso."""
+class ReportViewerWidget(QWidget):
+    """Pestaña del Workspace para inspeccionar el informe técnico TXT generado."""
 
-    def __init__(self, get_report_text: Callable[[], str]):
-        self.get_report_text = get_report_text
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.report_text: str = ""
 
-    def build_ui(self, parent_tag: str):
-        with dpg.group(parent=parent_tag):
-            # Barra de herramientas superior del visor
-            with dpg.group(horizontal=True):
-                dpg.add_text("Informe Técnico Paso a Paso:", color=(0, 180, 216, 255))
-                dpg.add_spacer(width=20)
-                dpg.add_input_text(label="Ruta Fichero", default_value="output/Informe_Georreferenciacion.txt",
-                                   width=260, tag="report_output_path_input")
-                dpg.add_button(label="EXPORTAR FICHERO TXT", callback=self._cb_export_file)
-                dpg.add_button(label="COPIAR AL PORTAPAPELES", callback=self._cb_copy_clipboard)
-                dpg.add_spacer(width=10)
-                dpg.add_text("", tag="report_status_text", color=(6, 214, 160, 255))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
-            dpg.add_separator()
-            dpg.add_spacer(height=3)
+        bar_layout = QHBoxLayout()
+        lbl = QLabel("Informe Técnico Paso a Paso (Auditoría SVD, Geodesia y Residuales)")
+        lbl.setStyleSheet("color: #00b4d8; font-weight: bold;")
+        bar_layout.addWidget(lbl)
+        bar_layout.addStretch()
 
-            # Area de texto de informe a pantalla completa
-            with dpg.child_window(width=-1, height=-1, border=True):
-                dpg.add_input_text(
-                    default_value="",
-                    multiline=True,
-                    readonly=True,
-                    width=-1,
-                    height=-1,
-                    tag="global_report_viewer"
-                )
+        self.btn_export = QPushButton("Exportar Informe TXT...")
+        self.btn_export.clicked.connect(self.export_report)
+        bar_layout.addWidget(self.btn_export)
 
-    def update_report(self, text: str):
-        """Actualiza el contenido mostrado en el visor de informe."""
-        if dpg.does_item_exist("global_report_viewer"):
-            dpg.set_value("global_report_viewer", text)
+        self.btn_copy = QPushButton("Copiar al Portapapeles")
+        self.btn_copy.clicked.connect(self.copy_to_clipboard)
+        bar_layout.addWidget(self.btn_copy)
 
-    def _cb_copy_clipboard(self):
-        txt = self.get_report_text()
-        if txt:
-            dpg.set_clipboard_text(txt)
-            dpg.set_value("report_status_text", "[OK] Copiado al portapapeles")
-        else:
-            dpg.set_value("report_status_text", "Aviso: No hay informe generado aún")
+        layout.addLayout(bar_layout)
 
-    def _cb_export_file(self):
-        txt = self.get_report_text()
-        if not txt:
-            dpg.set_value("report_status_text", "Aviso: Ejecute primero el cálculo")
+        self.text_edit = QTextEdit()
+        self.text_edit.setReadOnly(True)
+        self.text_edit.setStyleSheet(
+            "background-color: #121418; color: #e6ebf5; font-family: 'Consolas', 'Courier New', monospace; font-size: 11px; border: 1px solid #2d313d;"
+        )
+        layout.addWidget(self.text_edit)
+
+    def set_report_text(self, text: str):
+        self.report_text = text
+        self.text_edit.setPlainText(text)
+
+    def export_report(self):
+        if not self.report_text:
+            QMessageBox.warning(self, "Aviso", "No hay contenido en el informe para exportar.")
             return
+        fpath, _ = QFileDialog.getSaveFileName(
+            self, "Exportar Informe Técnico", "output/Informe_Georreferenciacion.txt", "Texto (*.txt)"
+        )
+        if fpath:
+            Path(fpath).write_text(self.report_text, encoding="utf-8")
+            QMessageBox.information(self, "Guardado", f"Informe guardado en:\n{fpath}")
 
-        out_path_str = dpg.get_value("report_output_path_input").strip() or "output/Informe_Georreferenciacion.txt"
-        p = Path(out_path_str)
-        try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(txt, encoding="utf-8")
-            dpg.set_value("report_status_text", f"[OK] Guardado en: {p.name}")
-        except Exception as e:
-            dpg.set_value("report_status_text", f"Error: {str(e)[:35]}")
+    def copy_to_clipboard(self):
+        if not self.report_text:
+            return
+        self.text_edit.selectAll()
+        self.text_edit.copy()
+        QMessageBox.information(self, "Copiado", "Informe copiado al portapapeles del sistema.")

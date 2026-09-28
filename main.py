@@ -5,9 +5,9 @@ Punto de entrada principal para la aplicación PyGSN:
 Transformación de Coordenadas, Georreferenciación de Rigs y Determinación de Actitud.
 
 Modos de uso:
-1. Modo Gráfico (DearPyGui):
+1. Modo Gráfico (PySide6 / Qt):
    python main.py
-   (Abre la interfaz interactiva con constructor de plataformas y vistas técnicas 2D)
+   (Abre la interfaz interactiva con constructor de plataformas, vistas CAD 2D y capas)
 
 2. Modo Terminal / Consola (CLI):
    python main.py --run [--body data/calibracion_vehiculo.txt] [--obs data/observaciones_sensores.txt] [--output output/informe.txt]
