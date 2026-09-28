@@ -1,14 +1,15 @@
 """
-PyGSN - Reporting Module
-========================
-Generador de informes y ficheros de texto (.txt) del procesamiento paso a paso
-para la entrega academica de la Practica 1 (Georreferenciacion de Sensores y Navegacion, UPV).
+PyGSN - Technical Reporting Module
+==================================
+Generador de informes técnicos rigurosos en formato texto (.txt) del procesamiento
+paso a paso de georreferenciación, transformación de marcos de referencia y determinación
+de actitud para plataformas y rigs multisensores arbitrarios.
 """
 
 from datetime import datetime
 import numpy as np
 from .georeferencing import GeoreferencingSolution
-from .geodesy import rad_to_dms, radii_of_curvature
+from .geodesy import rad_to_dms, ecef_to_geodetic
 
 
 def format_matrix_3x3(M: np.ndarray, indent: str = "   ") -> str:
@@ -20,14 +21,14 @@ def format_matrix_3x3(M: np.ndarray, indent: str = "   ") -> str:
 
 def generate_georeferencing_report(
     sol: GeoreferencingSolution,
-    author: str = "Bryan Andres Botello",
-    project: str = "Sistemas de Navegación (S3) - UPV",
-    doc_id: str = "PyGSN-GEOREF-2026",
+    author: str = "Ingeniero PyGSN",
+    project: str = "Proyecto de Georreferenciación y Navegación Multi-Sensor",
+    doc_id: str = "PyGSN-GEOREF-SOLVER",
     title: str = "INFORME TÉCNICO DE GEORREFERENCIACIÓN Y TRANSFORMACIÓN MULTISENSOR"
 ) -> str:
     """
-    Genera el informe técnico de procesamiento paso a paso para georreferenciación
-    y determinación de actitud de plataforma multisensor.
+    Genera el informe técnico estructurado de procesamiento paso a paso para georreferenciación
+    y determinación de actitud de cualquier plataforma multisensor.
     """
     now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     ell = sol.ellipsoid
@@ -48,18 +49,16 @@ def generate_georeferencing_report(
     doc.append("")
 
     # =========================================================================
-    # PUNTO 1
+    # SECCION 1: GNSS Y DETERMINACION DE ACTITUD
     # =========================================================================
     doc.append("=" * 90)
-    doc.append("PUNTO 1: DETERMINACIÓN DE LA ORIENTACIÓN Y CENTRO DE LA PLATAFORMA (GNSS)")
+    doc.append("SECCIÓN 1: DETERMINACIÓN DE ACTITUD DE PLATAFORMA MEDIANTE CONSTELACIÓN GNSS")
     doc.append("=" * 90)
-    doc.append("1.1. Coordenadas Geodésicas Observadas por los Receptores GNSS (ETRS89):")
+    doc.append("1.1. Coordenadas Geodésicas Observadas por los Receptores GNSS:")
     doc.append("   Sensor        Latitud            Longitud         h.elip(m)   Código")
     doc.append("   ------   -----------------   -----------------   -----------  ------")
-    for code in ["REC2", "REC3", "REC4", "REC5"]:
+    for code in sol.gnss_ecef.keys():
         xe = sol.gnss_ecef[code]
-        # Recuperamos geodesicas originales
-        from .geodesy import ecef_to_geodetic
         lat, lon, h = ecef_to_geodetic(xe, ell)
         _, _, _, lat_str = rad_to_dms(lat)
         _, _, _, lon_str = rad_to_dms(lon)
@@ -69,7 +68,7 @@ def generate_georeferencing_report(
     doc.append("1.2. Coordenadas Cartesianas ECEF (e-frame) de los Receptores GNSS:")
     doc.append("   Sensor        X1 (m)             X2 (m)             X3 (m)      Código")
     doc.append("   ------   ----------------   ----------------   ----------------  ------")
-    for code in ["REC2", "REC3", "REC4", "REC5"]:
+    for code in sol.gnss_ecef.keys():
         xe = sol.gnss_ecef[code]
         doc.append(f"      -     {xe[0]:16.4f}   {xe[1]:16.4f}   {xe[2]:16.4f}   {code}")
 
@@ -91,7 +90,7 @@ def generate_georeferencing_report(
     doc.append("1.5. Vectores Relativos en n-frame respecto al Centroide:")
     doc.append("   Sensor        Norte (m)          Este (m)           Down (m)    Código")
     doc.append("   ------   ----------------   ----------------   ----------------  ------")
-    for code in ["REC2", "REC3", "REC4", "REC5"]:
+    for code in sol.gnss_ecef.keys():
         vn = sol.gnss_vectors_n[code]
         doc.append(f"      -     {vn[0]:16.4f}   {vn[1]:16.4f}   {vn[2]:16.4f}   {code}")
 
@@ -116,7 +115,12 @@ def generate_georeferencing_report(
     doc.append(f"   YAW   = {y_g:16.10f} deg")
 
     doc.append("")
-    doc.append("1.9. Coordenadas del Origen de la Plataforma (PLA):")
+    # =========================================================================
+    # SECCION 2: ORIGEN DE LA PLATAFORMA
+    # =========================================================================
+    doc.append("=" * 90)
+    doc.append("SECCIÓN 2: DETERMINACIÓN DEL ORIGEN DE LA PLATAFORMA (PLA)")
+    doc.append("=" * 90)
     doc.append("   xe_pla = xe_cent - Cn2e @ Cb2n @ xb_cent")
     pe = sol.pla_origin_ecef
     _, _, _, lat_pla_str = rad_to_dms(sol.pla_origin_lat_rad)
@@ -128,80 +132,82 @@ def generate_georeferencing_report(
     doc.append("")
 
     # =========================================================================
-    # PUNTO 2A
+    # SECCION 3: PROPAGACION DE SENSORES CON ACTITUD GNSS
     # =========================================================================
     doc.append("=" * 90)
-    doc.append("PUNTO 2A: DETERMINACIÓN DE COORDENADAS MEDIANTE ACTITUD GNSS")
+    doc.append("SECCIÓN 3: GEORREFERENCIACIÓN Y PROPAGACIÓN DE SENSORES DEL RIG (SOLUCIÓN GNSS)")
     doc.append("=" * 90)
-    doc.append("2A.1. Coordenadas en Sistema Terrestre ECEF (e-frame ETRS89):")
+    doc.append("3.1. Coordenadas en Sistema Terrestre ECEF (e-frame):")
     doc.append("   Sensor        X1 (m)             X2 (m)             X3 (m)      Código")
     doc.append("   ------   ----------------   ----------------   ----------------  ------")
-    for code, res in sol.results_2a.items():
+    for code, res in sol.results_gnss.items():
         doc.append(f"   {code:6s}   {res.ecef[0]:16.4f}   {res.ecef[1]:16.4f}   {res.ecef[2]:16.4f}   {code}")
 
     doc.append("")
-    doc.append("2A.2. Coordenadas Geodésicas (ETRS89) con Altitud Elipsoidal:")
+    doc.append("3.2. Coordenadas Geodésicas Elipsoidales con Altitud Elipsoidal:")
     doc.append("   Sensor        Latitud            Longitud         h.elip(m)   Código")
     doc.append("   ------   -----------------   -----------------   -----------  ------")
-    for code, res in sol.results_2a.items():
+    for code, res in sol.results_gnss.items():
         _, _, _, lat_s = rad_to_dms(res.lat_rad)
         _, _, _, lon_s = rad_to_dms(res.lon_rad)
         doc.append(f"   {code:6s}   {lat_s:>17s}   {lon_s:>17s}   {res.h_ellip:11.4f}   {code}")
 
     doc.append("")
-    doc.append("2A.3. Coordenadas Proyectadas UTM Huso 30 con Altitud Ortométrica (H = h - N):")
+    doc.append(f"3.3. Coordenadas Proyectadas UTM con Altitud Ortométrica (H = h - N, N = {sol.geoid_undulation_N:.4f} m):")
     doc.append("   Sensor        Easting (m)        Northing (m)    Huso  H.orto(m)  Código")
     doc.append("   ------   ----------------   -----------------    ----  ---------  ------")
-    for code, res in sol.results_2a.items():
+    for code, res in sol.results_gnss.items():
         doc.append(f"   {code:6s}   {res.easting:16.4f}   {res.northing:17.4f}      {res.zone:02d}  {res.h_orto:9.4f}  {code}")
     doc.append("")
 
     # =========================================================================
-    # PUNTO 2B
+    # SECCION 4: ORIENTACION CON INS
     # =========================================================================
     doc.append("=" * 90)
-    doc.append("PUNTO 2B: DETERMINACIÓN DE COORDENADAS MEDIANTE ORIENTACIÓN INS")
+    doc.append("SECCIÓN 4: ORIENTACIÓN INERCIAL Y FUSIÓN MULTISENSOR (SOLUCIÓN INS / BORESIGHT / DECLINACIÓN)")
     doc.append("=" * 90)
-    doc.append("2B.1. Parámetros y Rotaciones Encadenadas:")
     r_i, p_i, y_i = sol.ins_attitude_deg
-    doc.append(f"   Actitud INS (Norte Magnético): Roll={r_i:.6f}º, Pitch={p_i:.6f}º, Yaw={y_i:.6f}º")
-    doc.append(f"   Declinación Magnética: {sol.magnetic_declination_deg:+.6f} deg")
+    doc.append(f"4.1. Actitud INS (Norte Magnético): Roll={r_i:.6f}º, Pitch={p_i:.6f}º, Yaw={y_i:.6f}º")
+    doc.append(f"   Declinación Magnética Local: {sol.magnetic_declination_deg:+.6f} deg")
     doc.append("")
-    doc.append("   Matriz Cs2b (Misalignment INS s-frame -> b-frame):")
+    doc.append("4.2. Matriz Cs2b (Desalineamiento Boresight INS s-frame -> b-frame):")
     doc.append(format_matrix_3x3(sol.Cs2b_ins))
     doc.append("")
-    doc.append("   Matriz Cmn2gn (Norte Magnético -> Norte Geodésico):")
+    doc.append("4.3. Matriz Cmn2gn (Norte Magnético -> Norte Geodésico):")
     doc.append(format_matrix_3x3(sol.Cmn2gn))
     doc.append("")
-    doc.append("   Matriz Cb2n Total = Cmn2gn @ Cs2n @ Cb2s:")
+    doc.append("4.4. Matriz Cb2n Total con INS = Cmn2gn @ Cs2n @ Cb2s:")
     doc.append(format_matrix_3x3(sol.Cb2n_ins))
     r_it, p_it, y_it = sol.attitude_ins_total_deg
     doc.append(f"   Actitud Total Plataforma con INS: Roll={r_it:.10f}º, Pitch={p_it:.10f}º, Yaw={y_it:.10f}º")
 
     doc.append("")
-    doc.append("2B.2. Coordenadas Proyectadas UTM Huso 30 con Altitud Ortométrica (INS):")
+    doc.append("4.5. Coordenadas Proyectadas UTM con Altitud Ortométrica (Solución INS):")
     doc.append("   Sensor        Easting (m)        Northing (m)    Huso  H.orto(m)  Código")
     doc.append("   ------   ----------------   -----------------    ----  ---------  ------")
-    for code, res in sol.results_2b.items():
+    for code, res in sol.results_ins.items():
         doc.append(f"   {code:6s}   {res.easting:16.4f}   {res.northing:17.4f}      {res.zone:02d}  {res.h_orto:9.4f}  {code}")
 
     doc.append("")
+    # =========================================================================
+    # SECCION 5: COMPARACION Y RESIDUALES
+    # =========================================================================
     doc.append("=" * 90)
-    doc.append("COMPARACIÓN Y RESIDUALES: DIFERENCIAS (2A - 2B) EN UTM HUSO 30 Y COTA")
+    doc.append("SECCIÓN 5: ANÁLISIS DE RESIDUALES Y CONTROL DE CALIDAD (DISCREPANCIAS GNSS - INS)")
     doc.append("=" * 90)
     doc.append("   Sensor      Delta Este (m)     Delta Norte (m)     Delta H (m)    Código")
     doc.append("   ------   -----------------   -----------------   -------------    ------")
-    for code, (dE, dN, dH) in sol.diff_2a_2b_utm.items():
+    for code, (dE, dN, dH) in sol.diff_gnss_ins_utm.items():
         doc.append(f"   {code:6s}   {dE:17.4f}   {dN:17.4f}   {dH:13.4f}    {code}")
 
     doc.append("")
     doc.append("=" * 90)
-    doc.append("FIN DEL INFORME DE PROCESAMIENTO PASO A PASO")
-    doc.append("Generado automáticamente por PyGSN (Guiado, Sensores y Navegación)")
+    doc.append("FIN DEL INFORME TÉCNICO DE GEORREFERENCIACIÓN Y NAVEGACIÓN")
+    doc.append("Generado automáticamente por PyGSN (Georreferenciación de Sensores y Navegación)")
     doc.append("=" * 90)
 
     return "\n".join(doc)
 
 
-# Alias de compatibilidad
+# Aliases de compatibilidad
 generate_p1_full_txt_report = generate_georeferencing_report
