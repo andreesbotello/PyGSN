@@ -10,9 +10,9 @@ import dearpygui.dearpygui as dpg
 COLOR_CANVAS_BG = (22, 24, 29, 255)
 COLOR_GRID_MAJOR = (55, 60, 72, 255)
 COLOR_GRID_MINOR = (35, 38, 46, 255)
-COLOR_AXIS_X = (230, 57, 70, 255)       # Rojo (Adelante / Longitudinal)
-COLOR_AXIS_Y = (42, 157, 143, 255)      # Verde (Derecha / Transversal)
-COLOR_AXIS_Z = (69, 123, 157, 255)      # Azul (Vertical / Altura)
+COLOR_AXIS_X = (235, 50, 50, 255)       # Rojo (R) puro: Adelante / Longitudinal (+Xb)
+COLOR_AXIS_Y = (45, 195, 75, 255)      # Verde (G) puro: Derecha / Transversal (+Yb)
+COLOR_AXIS_Z = (45, 135, 245, 255)     # Azul (B) puro: Vertical (-Zb Arriba / +Zb Abajo)
 COLOR_PLATFORM_BODY = (0, 180, 216, 200) # Cyan para el chasis
 COLOR_ORIGIN = (255, 255, 255, 255)     # Blanco (PLA)
 COLOR_CENTROID = (255, 183, 3, 255)     # Ambar / Oro (CENT)
