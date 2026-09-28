@@ -26,7 +26,7 @@ class KinematicsPanel:
         with dpg.group(parent=parent_tag):
             # Barra superior
             with dpg.group(horizontal=True):
-                dpg.add_text("Simulador Cinemático de Trayectorias y Guiado", color=(0, 180, 216, 255))
+                dpg.add_text("Simulador Cinemático de Trayectorias y Navegación", color=(0, 180, 216, 255))
                 dpg.add_spacer(width=20)
                 dpg.add_button(label="SIMULAR TRAYECTORIA (b -> n -> e)", callback=self._cb_run_simulation)
                 dpg.add_spacer(width=10)

@@ -61,14 +61,28 @@ class Sensor:
         )
 
 
+class PlatformType(str, Enum):
+    GENERIC = "GENERIC"
+    VEHICLE = "VEHICLE"
+    DRONE_X4 = "DRONE_X4"
+    CAR = "CAR"
+    ROVER = "ROVER"
+    BASE_STATION = "BASE_STATION"
+    TEST_BENCH = "TEST_BENCH"
+
+
 @dataclass
 class Platform:
-    """Modelo universal de plataforma / cuerpo del vehiculo."""
+    """Modelo universal de plataforma / cuerpo de vehiculo o estacion base."""
+    id: str = "PLAT_1"
     name: str = "Plataforma Generica"
-    platform_type: str = "GENERIC"              # "GENERIC", "DRONE_X4", "CAR", "ROVER"
-    length_m: float = 1.0                       # Dimension longitudinal X [m]
-    width_m: float = 0.8                        # Dimension transversal Y [m]
-    height_m: float = 0.2                       # Dimension vertical Z [m]
+    platform_type: str = "GENERIC"              # "GENERIC", "VEHICLE", "DRONE_X4", "CAR", "ROVER", "BASE_STATION", "TEST_BENCH"
+    is_fixed: bool = False                      # True para estaciones base fijas / pilares
+    origin_geodetic: tuple[float, float, float] | None = None  # (lat_rad, lon_rad, h_m) para estaciones fijas
+    has_dimensions: bool = False                # False = sin caja rigida predeterminada (chasis libre)
+    length_m: float = 0.0                       # Dimension longitudinal X [m]
+    width_m: float = 0.0                        # Dimension transversal Y [m]
+    height_m: float = 0.0                       # Dimension vertical Z [m]
     sensors: dict[str, Sensor] = field(default_factory=dict)
 
     def add_sensor(self, sensor: Sensor) -> None:
@@ -85,8 +99,12 @@ class Platform:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "id": self.id,
             "name": self.name,
             "platform_type": self.platform_type,
+            "is_fixed": self.is_fixed,
+            "origin_geodetic": list(self.origin_geodetic) if self.origin_geodetic else None,
+            "has_dimensions": self.has_dimensions,
             "length_m": self.length_m,
             "width_m": self.width_m,
             "height_m": self.height_m,
@@ -96,11 +114,15 @@ class Platform:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Platform":
         plat = cls(
+            id=data.get("id", "PLAT_1"),
             name=data.get("name", "Plataforma"),
             platform_type=data.get("platform_type", "GENERIC"),
-            length_m=float(data.get("length_m", 1.0)),
-            width_m=float(data.get("width_m", 0.8)),
-            height_m=float(data.get("height_m", 0.2)),
+            is_fixed=bool(data.get("is_fixed", False)),
+            origin_geodetic=tuple(data["origin_geodetic"]) if data.get("origin_geodetic") else None,
+            has_dimensions=bool(data.get("has_dimensions", False)),
+            length_m=float(data.get("length_m", 0.0)),
+            width_m=float(data.get("width_m", 0.0)),
+            height_m=float(data.get("height_m", 0.0)),
         )
         for s_data in data.get("sensors", {}).values():
             plat.add_sensor(Sensor.from_dict(s_data))

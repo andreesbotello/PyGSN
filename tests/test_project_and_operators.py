@@ -71,6 +71,50 @@ class TestProjectAndAssets(unittest.TestCase):
             if tmp_path.exists():
                 tmp_path.unlink()
 
+    def test_multi_platform_semantic_hierarchy(self):
+        """Valida la jerarquia semantica: un proyecto puede contener vehiculo y estacion base, cada uno con sus sensores."""
+        proj = Project(name="Mision Navegacion Diferencial")
+
+        # 1. Plataforma Movil (Vehiculo Rover)
+        rover = Platform(id="ROVER_1", name="Vehiculo Rover", platform_type="ROVER", length_m=3.5, width_m=1.8, height_m=1.4)
+        rover.add_sensor(Sensor(code="GNSS_ROV", name="Antena Rover", sensor_type=SensorType.GNSS, lever_arm_b=np.array([1.2, 0.0, -1.0])))
+        rover.add_sensor(Sensor(code="IMU_ROV", name="Inercial IMU", sensor_type=SensorType.INS, lever_arm_b=np.array([0.0, 0.0, 0.0])))
+        proj.add_platform(rover, set_active=True)
+
+        # 2. Plataforma Fija (Estacion Base GNSS)
+        base = Platform(
+            id="BASE_STATION",
+            name="Estacion GNSS Permanente",
+            platform_type="BASE_STATION",
+            is_fixed=True,
+            origin_geodetic=(np.radians(39.4820), np.radians(-0.3475), 65.2),
+            length_m=0.5, width_m=0.5, height_m=1.6
+        )
+        base.add_sensor(Sensor(code="GNSS_BASE", name="Antena Choke Ring Base", sensor_type=SensorType.GNSS, lever_arm_b=np.array([0.0, 0.0, -1.5])))
+        proj.add_platform(base, set_active=False)
+
+        self.assertEqual(len(proj.platforms), 2)
+        self.assertEqual(proj.platform.id, "ROVER_1")
+        self.assertIn("GNSS_ROV", proj.platforms["ROVER_1"].sensors)
+        self.assertIn("GNSS_BASE", proj.platforms["BASE_STATION"].sensors)
+        self.assertTrue(proj.platforms["BASE_STATION"].is_fixed)
+
+        # Probar serializacion y recuperacion
+        with tempfile.NamedTemporaryFile(suffix=".pygsn", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            proj.save(tmp_path)
+            loaded = Project.load(tmp_path)
+            self.assertEqual(len(loaded.platforms), 2)
+            self.assertIn("ROVER_1", loaded.platforms)
+            self.assertIn("BASE_STATION", loaded.platforms)
+            self.assertEqual(loaded.platforms["BASE_STATION"].platform_type, "BASE_STATION")
+            self.assertTrue(loaded.platforms["BASE_STATION"].is_fixed)
+            self.assertIn("GNSS_BASE", loaded.platforms["BASE_STATION"].sensors)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
 
 class TestOperatorPipeline(unittest.TestCase):
     def setUp(self):
