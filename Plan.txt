@@ -1,0 +1,212 @@
+# ==============================================================================
+# PyGSN - Plan Maestro de Arquitectura y Construcción de la Interfaz Gráfica
+# ==============================================================================
+# Documento rector para la refactorización modular y evolutiva de la GUI en DearPyGui.
+# Filosofía: Software de ingeniería riguroso, desacoplado, profesional y responsivo.
+
+---
+
+## 1. Estructura General de la Interfaz (Layout de Grado Industrial)
+
+La ventana principal se organiza en 5 zonas funcionales bien diferenciadas:
+
+```
++--------------------------------------------------------------------------------+
+|  1. Barra Superior de Ventana:  "%NombreProyecto% - PyGSN" (Maximizada)         |
++--------------------------------------------------------------------------------+
+|  2. Barra de Menú Global:  [Proyecto] [Plataforma] [Georref] [Cinemática] ...  |
++--------------------------------------------------------------------------------+
+|  3. Barra de Herramientas Contextual (Ribbon / Action Bar dinámica)          |
++----------------------+---------------------------------------------------------+
+|  4. Panel de Capas   |  5. Área de Trabajo Dinámica (Workspace)                |
+|     y Jerarquía      |                                                         |
+|     - Vehículo/Chasis|     [ Pestaña: Vistas CAD 2D (Planta, Perfil, Alzado) ] |
+|     - Sensores (Rig) |     [ Pestaña: Solver de Georreferenciación ]          |
+|     - Resultados     |     [ Pestaña: Trayectorias y Plots Cinemáticos ]      |
+|     - Inspector      |     [ Pestaña: Visor de Informe Técnico TXT ]           |
+|     (Ancho: ~280 px) |     (Ocupa todo el espacio restante de forma fluida)    |
++----------------------+---------------------------------------------------------+
+|  6. Barra de Estado: [Listo] | Elipsoide: GRS80 | UTM: Huso 30 | Cursor: (X, Y)|
++--------------------------------------------------------------------------------+
+```
+
+---
+
+## 2. Definición Detallada de Componentes
+
+### 2.1. Barra de Ventana (Window Title)
+- Título dinámico: `"%NombreProyecto% - PyGSN"`
+- En arranque limpio sin guardar: `"Proyecto sin título - PyGSN"`
+- Con cambios pendientes: `"*%NombreProyecto% - PyGSN"`
+- Configuración de arranque: Pantalla completa / maximizada por defecto (`dpg.maximize_viewport()`), evitando desfases o cortes en resoluciones estándar y panorámicas.
+
+### 2.2. Barra de Menú Global (Menu Bar)
+Contiene las operaciones del sistema organizadas por dominio de ingeniería:
+
+1. **[Proyecto]**:
+   - `Nuevo Proyecto...` (Abre modal de configuración inicial)
+   - `Abrir Proyecto (.pygsn)...` (Carga JSON estructurado)
+   - `Abrir Reciente` (Submenú con últimos 5 proyectos)
+   - `--------------------`
+   - `Guardar` (Sobrescribe el `.pygsn` activo)
+   - `Guardar Como...`
+   - `--------------------`
+   - `Propiedades del Proyecto...` (Ver/editar elipsoide, zona UTM, ondulación geoidal N)
+   - `Exportar Informe Técnico TXT...`
+   - `--------------------`
+   - `Salir de PyGSN`
+
+2. **[Plataforma]**:
+   - `Nuevo Chasis...` (Selector de plantilla: Vehículo Terrestre, Dron UAV X4, Rover, Banco de Laboratorio)
+   - `Dimensionar Plataforma...` (Editar largo, ancho, alto de carrocería)
+   - `Importar Geometría 3D (Malla/Polígonos)...`
+   - `--------------------`
+   - `Añadir Sensor...` (Abre diálogo: Código, Tipo, Lever-arm [x1, x2, x3], Boresight [alpha, beta, gamma])
+   - `Editar Sensor Seleccionado...`
+   - `Eliminar Sensor Seleccionado`
+   - `--------------------`
+   - `Exportar Calibración Rig (.txt)...`
+   - `Importar Calibración Rig (.txt)...`
+
+3. **[Georreferenciación]**:
+   - `Cargar Observaciones de Campo (.txt)...` (GNSS + INS)
+   - `Resolver Georreferenciación y Actitud (SVD Kabsch)`
+   - `--------------------`
+   - `Inspeccionar Matriz C_b^n y Descomposición SVD`
+   - `Inspeccionar Coordenadas Propagadas (ECEF, Geodésicas, UTM)`
+   - `Análisis de Residuales (GNSS vs INS)`
+
+4. **[Cinemática & Trayectorias]**:
+   - `Definir Perfil de Maniobra b-frame...` (Secuencia de avances y ángulos roll/pitch/yaw)
+   - `Integrar Trayectoria b-frame -> n-frame -> e-frame`
+   - `Ver Gráfica de Navegación Local (Plano NED)`
+   - `Ver Trayectoria Geocéntrica ECEF`
+   - `Exportar Trayectoria (CSV / KML)`
+
+5. **[Visualización]**:
+   - `Modo 3 Vistas Ortogonales CAD` (Planta, Perfil, Alzado simultáneas)
+   - `Maximizar Vista Planta (Top-down)`
+   - `Maximizar Vista Perfil (Lateral)`
+   - `Maximizar Vista Alzado (Frontal)`
+   - `--------------------`
+   - `Centrar Modelo y Resetear Zoom`
+   - `Alternar Cuadrícula Milimétrica (Grid)`
+   - `Alternar Triedros Cartesianos de Sensores`
+   - `Alternar Etiquetas de Texto en Lienzo`
+
+6. **[Configuración]**:
+   - `Elipsoide de Referencia...` (GRS80 / WGS84)
+   - `Zona UTM y Proyección Cartográfica...`
+   - `Ondulación Geoidal N y Altitudes Ortométricas...`
+   - `Declinación Magnética Local...`
+   - `Unidades Angulares (DMS sexagesimal vs Grados decimales)`
+
+7. **[Ayuda]**:
+   - `Manual de Usuario PyGSN`
+   - `Formulación Teórica y Convenciones (Jekeli / Hoffmann / Groves)`
+   - `Validación Matemática (Suite de Tests Unitarios)`
+   - `Acerca de PyGSN`
+
+---
+
+### 2.3. Barra de Herramientas Contextual (Ribbon / Action Bar)
+Ubicada bajo la barra de menú, con botones rápidos de 1 clic que se adaptan a la pestaña activa:
+- **Modo Proyecto**: [Nuevo] [Abrir] [Guardar] [Propiedades] [Exportar TXT]
+- **Modo Plataforma**: [Chasis] [Añadir Sensor] [Editar Sensor] [Eliminar] [Centrar Vista] [Zoom +] [Zoom -]
+- **Modo Georreferenciación**: [Cargar Obs] [Calcular SVD] [Ver Informe] [Copiar Resultados]
+- **Modo Cinemática**: [Añadir Maniobra] [Simular] [Plot NED] [Exportar KML]
+
+---
+
+### 2.4. Panel de Capas y Jerarquía (Layers / Project Tree)
+Panel lateral colapsable (ancho ~280 px) que da acceso jerárquico a todos los elementos del proyecto:
+- **Árbol de Elementos**:
+  - `Proyecto: [Nombre]`
+    - `Plataforma: [Tipo y Dimensiones]` (Checkbox visibilidad, color)
+    - `Sensores (Rig Multisensor Arbitrario)`:
+      - `[PLA] Origen Plataforma`
+      - `[GNSS] Antenas GNSS (1..N)`
+      - `[INS] Unidades Inerciales IMU/INS`
+      - `[CAM] Cámaras Ópticas / Fotogramétricas`
+      - `[LID] Sensores LiDAR`
+      - `[ODO] Odómetros y Sensores Auxiliares`
+    - `Observaciones Activas`:
+      - `Observaciones GNSS (N Antenas)`
+      - `Vector Actitud INS (Roll, Pitch, Yaw)`
+    - `Resultados Calculados`:
+      - `Actitud C_b^n (SVD Kabsch)`
+      - `Coordenadas Propagadas de Todos los Sensores`
+      - `Residuales de Consistencia y Calibración`
+- **Inspector Rápido (Subpanel Inferior)**:
+  Al hacer clic en cualquier sensor o elemento, muestra sus propiedades numéricas (palanca $r_b^s$, ángulos boresight, coordenadas propagadas) permitiendo edición inmediata.
+
+---
+
+### 2.5. Área de Trabajo Dinámica (Workspace)
+El espacio principal es responsivo (se expande a todo el ancho y alto disponible) y se organiza en vistas especializadas desacopladas:
+1. **Vista CAD 2D (Lienzo Técnico)**:
+   - Las 3 vistas ortogonales (Planta, Perfil, Alzado) calculan su tamaño dinámicamente según el espacio del viewport, sin anchos fijos de 360 px que rompan en pantallas grandes.
+   - Cuadrícula milimetrada interactiva con zoom y pan (arrastre).
+2. **Vista Solver de Georreferenciación**:
+   - Tablas interactivas de coordenadas GNSS e INS.
+   - Ejecución del cálculo y visualización inmediata de matrices ($H, U, S, V^T, C_b^n$).
+3. **Vista de Informe Técnico**:
+   - Visor de texto enriquecido con botón de copiado rápido al portapapeles y exportación a fichero `.txt`.
+4. **Vista de Simulación Cinemática**:
+   - Editor de trayectoria por comandos de $b$-frame y gráfico 2D del trayecto en navegación local NED.
+
+---
+
+## 3. Flujo de Trabajo Operativo (Workflow)
+
+1. **Arranque Limpio**:
+   - La aplicación inicia maximizada con un lienzo limpio o proyecto en blanco titulado `"Proyecto sin título - PyGSN"`.
+2. **Creación / Carga del Proyecto**:
+   - El usuario hace clic en `Proyecto -> Nuevo` (o presiona `Ctrl+N`).
+   - Se abre el modal "Crear Proyecto": introduce nombre, selecciona elipsoide (GRS80 por defecto), zona UTM (30) y parámetros locales.
+   - Al pulsar "Crear", el título de la ventana se actualiza y la barra de estado confirma el entorno.
+3. **Definición del Vehículo (Rig)**:
+   - Puede cargar una calibración existente (`Plataforma -> Importar Calibración (.txt)`) o usar el asistente para añadir sensores manualmente con sus lever-arms y orientaciones.
+   - El lienzo CAD 2D refleja instantáneamente la posición de cada sensor en las 3 vistas.
+4. **Carga de Datos y Cómputo**:
+   - Clic en `Georreferenciación -> Cargar Observaciones` o pulsar `[ Resolver SVD ]` en la barra de herramientas.
+   - La solución se calcula en milisegundos mediante el núcleo desacoplado de NumPy.
+5. **Inspección y Exportación**:
+   - El usuario inspecciona los resultados en el panel de capas, verifica la actitud y los residuales, y exporta el informe técnico oficial con `Proyecto -> Exportar Informe Técnico TXT`.
+
+---
+
+## 4. Etapas de Construcción Planificadas (Roadmap)
+
+Para garantizar estabilidad matemática, código limpio y evitar sobrecargar la interfaz de golpe, la construcción se ejecutará en 5 fases secuenciales:
+
+### Fase 1: Base Estructural y Ventana Principal (ESTADO: COMPLETADA)
+- Viewport maximizado por defecto (`maximize_viewport()`).
+- Título limpio dinámico (`"%NombreProyecto% - PyGSN"`).
+- Barra de Menú Global implementada con todas las secciones de ingeniería.
+- Eliminación total de terminología académica o textos obsoletos en cabeceras.
+
+### Fase 2: Diálogos Modales de Proyecto y Gestión de Estado (ESTADO: COMPLETADA)
+- Modal interactivo `Nuevo Proyecto` (configuración de nombre, elipsoide GRS80/WGS84, zona UTM, ondulación N).
+- Modal `Propiedades del Proyecto` para editar parámetros geodésicos en caliente.
+- Diálogo de archivo para `Abrir Proyecto (.pygsn)` y `Guardar Como...`.
+- Sincronización del estado global `Project` con la barra de título de la ventana.
+
+### Fase 3: Panel de Jerarquía / Capas e Inspector de Propiedades (ESTADO: COMPLETADA)
+- Panel lateral izquierdo de capas colapsable (~290 px) con árbol jerárquico (`dpg.add_tree_node`).
+- Listado de chasis y sensores del rig con selección interactiva.
+- Subpanel "Inspector" para visualizar y editar en tiempo real coordenadas de palanca y boresight del sensor seleccionado con actualización inmediata del lienzo.
+
+### Fase 4: Rediseño Responsivo del Área de Trabajo (Workspace) (ESTADO: COMPLETADA)
+- Espacio de trabajo responsivo que aprovecha el 100% de la pantalla maximizada.
+- Desacoplamiento modular en 4 pestañas de trabajo especializadas:
+  - Pestaña 1: Lienzo CAD 2D (Planta, Perfil, Alzado en cuadrícula 2x2 amplia con zoom y centrado).
+  - Pestaña 2: Solver de Georreferenciación & Actitud (observaciones GNSS e INS en panel izquierdo, tarjetas de resultados y tabla completa de sensores en panel derecho).
+  - Pestaña 3: Informe Técnico TXT (visor monospace a pantalla completa con botón Copiar al Portapapeles y Exportar TXT).
+  - Pestaña 4: Simulación Cinemática & Trayectorias (integración elipsoidal y plot 2D acelerado por GPU).
+- Barra de herramientas contextual (Ribbon) con botones de acceso directo.
+
+### Fase 5: Integración Completa de Operadores y Validaciones (ESTADO: COMPLETADA)
+- Conexión de menús y herramientas con `GeoreferencingOperator` y `TrajectoryKinematicsOperator`.
+- Barra de estado inferior en tiempo real (estado del cálculo, proyecto, elipsoide, huso UTM, ondulación N).
+- Validación continua con la suite de pruebas unitarias (`python main.py --test`), 8 tests pasando en 0.18s.

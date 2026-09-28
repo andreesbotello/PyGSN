@@ -141,7 +141,7 @@ class TestOperatorPipeline(unittest.TestCase):
         self.assertIn("report_text", rep_res.data)
         report = rep_res.data["report_text"]
         self.assertIn("INFORME", report)
-        self.assertIn("PUNTO 1", report)
+        self.assertIn("SECCIÓN 1", report)
 
 
 if __name__ == "__main__":

@@ -105,16 +105,20 @@ def solve_multisensor_georeferencing(
     magnetic_declination_deg: float = -0.700,
     geoid_undulation_N: float = 50.0166,
     ellipsoid: Ellipsoid = GRS80,
-    gnss_sensor_codes: list[str] | None = None
+    gnss_sensor_codes: list[str] | None = None,
+    ins_sensor_code: str | None = None
 ) -> GeoreferencingSolution:
     """
-    Calcula la orientación y georreferenciación de una plataforma multisensor.
+    Calcula la orientación y georreferenciación de una plataforma multisensor arbitraria.
     """
     if gnss_sensor_codes is None:
-        # Detectar automáticamente sensores de tipo GNSS disponibles en las observaciones
+        # Detectar dinámicamente sensores de la plataforma presentes en las observaciones
         gnss_sensor_codes = [c for c in gnss_observations.keys() if c in platform.sensors]
-        if not gnss_sensor_codes:
-            gnss_sensor_codes = ["REC2", "REC3", "REC4", "REC5"]
+        if len(gnss_sensor_codes) < 3:
+            raise ValueError(
+                f"Se requieren al menos 3 antenas GNSS coincidentes entre la plataforma y las observaciones "
+                f"(encontradas: {len(gnss_sensor_codes)})."
+            )
 
     # 1. Puntos GNSS en ECEF y Centroide
     gnss_ecef = {}
@@ -179,8 +183,15 @@ def solve_multisensor_georeferencing(
     decl_rad = np.radians(magnetic_declination_deg)
     Cmn2gn = magnetic_to_geodetic_north_matrix(decl_rad)
 
-    # Boresight INS
-    ins_sensor = platform.sensors.get("INS")
+    # Boresight INS dinámico
+    ins_sensor = None
+    if ins_sensor_code:
+        ins_sensor = platform.sensors.get(ins_sensor_code)
+    if not ins_sensor:
+        for s in platform.sensors.values():
+            if s.sensor_type == SensorType.INS or s.code == "INS":
+                ins_sensor = s
+                break
     if ins_sensor:
         a1_i, a2_i, a3_i = [np.radians(x) for x in ins_sensor.boresight_deg]
     else:

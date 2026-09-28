@@ -39,9 +39,18 @@ class OrthoViewCanvas:
         self.tag_draw_side = "drawlist_side_view"
         self.tag_draw_front = "drawlist_front_view"
 
-        # Dimensiones de cada lienzo en pixeles
-        self.canvas_width = 380
-        self.canvas_height = 290
+        # Dimensiones de cada lienzo en pixeles (adaptables a pantalla completa)
+        self.canvas_width = 460
+        self.canvas_height = 320
+
+    def resize(self, width: int, height: int):
+        """Ajusta las dimensiones del lienzo y redibuja."""
+        self.canvas_width = max(240, int(width))
+        self.canvas_height = max(200, int(height))
+        for tag in [self.tag_draw_top, self.tag_draw_side, self.tag_draw_front]:
+            if dpg.does_item_exist(tag):
+                dpg.configure_item(tag, width=self.canvas_width, height=self.canvas_height)
+        self.redraw_all()
 
     def get_sensor_color(self, sensor: Sensor) -> tuple[int, int, int, int]:
         if sensor.sensor_type == SensorType.GNSS:
