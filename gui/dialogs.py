@@ -330,6 +330,7 @@ class DialogAddSensor(BaseDialog):
         self.combo_type = QComboBox()
         self.combo_type.addItems(["GNSS", "INS", "CAMERA", "LIDAR", "ODOMETER", "OTHER"])
         form.addRow("Tipo de Sensor:", self.combo_type)
+        layout.addLayout(form)
 
         group_arm = QGroupBox("Palanca de Brazo (Lever-Arm) en b-frame (m)")
         arm_layout = QHBoxLayout(group_arm)
@@ -374,8 +375,6 @@ class DialogAddSensor(BaseDialog):
         bore_layout.addWidget(self.spin_pitch)
         bore_layout.addWidget(self.spin_yaw)
         layout.addWidget(group_bore)
-
-        layout.addLayout(form)
         layout.addSpacing(10)
 
         btn_layout = QHBoxLayout()

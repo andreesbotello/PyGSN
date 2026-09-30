@@ -211,5 +211,21 @@ Para garantizar estabilidad matemática, código limpio y evitar sobrecargar la 
 - Barra de estado inferior en tiempo real (estado del cálculo, proyecto, elipsoide, huso UTM, ondulación N).
 - Validación continua con la suite de pruebas unitarias (`python main.py --test`), 8 tests pasando en 0.18s.
 
-X. Los estados de comprobación fallan descommunalmente. trataré de detallar los errores para facilitar la correción. 
-Error1. Flujo, creo una nueva plataforma, queda con chasis vacio. le doy a editar y lo que está bien es que pasa a dibujar chasis, porque esta inactivo Mover, Rotar, Escalar. pero bueno, dibujo el chasis, le doy click a Editar y me pregunta si deseo guardar o descartar, le doy guardar y aqui viene el error. permanece activo el Dibujar Chasis. a pesar de dar guardar. como si al darle guardar no desactiva la opción de edición. 
+### Fase 6: Suite CAD Vectorial y Checkpoint 1 'Ajuste de Plataforma' (ESTADO: COMPLETADA)
+- **Motor CAD Vectorial PySide6**: Vistas ortogonales $S$, $F$, $L$ y $4Q$ con zoom, paneo centrado, reglas métricas adaptativas y snapping milimétrico/centimétrico.
+- **Modelado Interactivo de Chasis**: Creación por caja, polígono en lienzo, trazado continuo y manipulación directa de vértices con marcadores visuales en las tres proyecciones ($S, F, L$).
+- **Transformaciones Cinemáticas 3D por Plano**:
+  - Mover: Arrastre interactivo y traslación paramétrica 3D $[X_b, Y_b, Z_b]$ con centrado al origen o centroide.
+  - Rotar: Rotación desacoplada según el plano de proyección activo:
+    - Vista Superior ($S$): plano $X_b-Y_b$ sobre eje $Z_b$ (Yaw / Guiñada).
+    - Vista Frontal ($F$): plano $Y_b-Z_b$ sobre eje $X_b$ (Roll / Alabeo).
+    - Vista Lateral ($L$): plano $X_b-Z_b$ sobre eje $Y_b$ (Pitch / Cabeceo).
+    - Pop-up dinámico con tarjeta informativa de plano y eje físico, sincronizado en caliente con la vista activa.
+  - Escalar: Factor isotrópico y recálculo estricto de envolventes y centroides.
+- **Sesión de Edición Robusta**: Aislamiento exclusivo de plataforma/sensor, confirmación de Guardar/Descartar cambios, pila Undo reversible (`Ctrl+Z`) y borrado con `Backspace`.
+- **Armonización Total GUI <-> CLI**: Soporte completo de 9 operaciones en la consola CLI (`platform add`, `chassis box/poly/pts/move/center/rotate/scale`, `sensor add/place/move/rotate`).
+- **Optimización y Limpieza de Arquitectura**:
+  - Purga completa de código legacy DearPyGui (~80 KB de código muerto suprimido) y saneamiento de dependencias.
+  - Preasignación en memoria (`__init__`) de plumas (`QPen`) y fuentes (`QFont`) en el motor de renderizado `OrthoCADCanvas` para eliminar allocations por frame.
+  - Estandarización ergonómica y visual de todos los diálogos y pop-ups.
+  - Limpieza de `.agents/Temp/` y catalogación técnica exhaustiva en `.agents/utilities/README.md` y `.agents/AGENTS.md`.

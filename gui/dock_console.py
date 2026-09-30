@@ -396,8 +396,9 @@ class ConsoleDock(QDockWidget):
                     plane = "S"
                 plat.rotate_plane(ang, plane)
                 self.chassis_modified.emit()
-                self.print_line(f"[OK] Chasis rotado {ang:+.2f}° en plano {plane}.")
-                self.print_line(f"     Nuevas dimensiones: Largo={plat.length_m:.3f}m, Ancho={plat.width_m:.3f}m.\n")
+                axis_name = {"S": "Zb (Yaw)", "F": "Xb (Roll)", "L": "Yb (Pitch)"}.get(plane, "Zb")
+                self.print_line(f"[OK] Chasis rotado {ang:+.2f}° en plano {plane} (Eje {axis_name}).")
+                self.print_line(f"     Nuevas dimensiones: Largo={plat.length_m:.3f}m, Ancho={plat.width_m:.3f}m, Alto={plat.height_m:.3f}m.\n")
             except ValueError:
                 self.print_line("Error: El ángulo debe ser un valor numérico en grados.\n")
             return

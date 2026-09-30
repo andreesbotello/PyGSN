@@ -204,28 +204,91 @@ class Platform:
     def rotate_plane(self, angle_deg: float, plane: str = "S") -> None:
         """
         Rota el chasis en el plano ortogonal 2D activo.
-        - En plano S: rotación alrededor de Zb (Yaw) afectando a Xb e Yb (dZb = 0).
+        - Plano 'S' (Superior): Rotación alrededor del eje Zb (Yaw / Guiñada) en plano Xb-Yb (ΔZb = 0).
+        - Plano 'F' (Frontal):  Rotación alrededor del eje Xb (Roll / Alabeo) en plano Yb-Zb (ΔXb = 0).
+        - Plano 'L' (Lateral):  Rotación alrededor del eje Yb (Pitch / Cabeceo) en plano Xb-Zb (ΔYb = 0).
         """
         self.ensure_polygon()
-        if not self.chassis_polygon:
+        if not self.has_dimensions:
             return
 
         rad = np.radians(angle_deg)
         cos_a = np.cos(rad)
         sin_a = np.sin(rad)
+        p_mode = plane.upper()
 
-        pts = np.array(self.chassis_polygon, dtype=np.float64)
-        centroid = np.mean(pts, axis=0)
-        rel = pts - centroid
+        if p_mode == "S":
+            # Rotación en plano Xb-Yb (Eje Zb / Yaw)
+            if self.chassis_polygon:
+                pts = np.array(self.chassis_polygon, dtype=np.float64)
+                centroid = np.mean(pts, axis=0)
+                rel = pts - centroid
+                rot_mat = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+                rotated_rel = rel @ rot_mat.T
+                rotated_pts = rotated_rel + centroid
 
-        rot_mat = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
-        rotated_rel = rel @ rot_mat.T
-        rotated_pts = rotated_rel + centroid
+                self.chassis_polygon = [[round(float(p[0]), 4), round(float(p[1]), 4)] for p in rotated_pts]
+                pts_new = np.array(self.chassis_polygon)
+                self.length_m = round(float(np.max(pts_new[:, 0]) - np.min(pts_new[:, 0])), 4)
+                self.width_m = round(float(np.max(pts_new[:, 1]) - np.min(pts_new[:, 1])), 4)
+            else:
+                l_old, w_old = self.length_m, self.width_m
+                self.length_m = round(l_old * abs(cos_a) + w_old * abs(sin_a), 4)
+                self.width_m = round(l_old * abs(sin_a) + w_old * abs(cos_a), 4)
 
-        self.chassis_polygon = [[round(float(p[0]), 4), round(float(p[1]), 4)] for p in rotated_pts]
-        pts_new = np.array(self.chassis_polygon)
-        self.length_m = round(float(np.max(pts_new[:, 0]) - np.min(pts_new[:, 0])), 4)
-        self.width_m = round(float(np.max(pts_new[:, 1]) - np.min(pts_new[:, 1])), 4)
+        elif p_mode == "F":
+            # Rotación en plano Yb-Zb (Eje Xb / Roll) -> transforma Ancho (Yb) y Alto (Zb)
+            w_old = self.width_m
+            h_old = self.height_m
+
+            # Intercambio exacto para múltiplos de 90°
+            is_90_mult = abs(abs(angle_deg) % 180.0 - 90.0) < 1e-3
+            is_180_mult = abs(abs(angle_deg) % 180.0) < 1e-3
+
+            if is_90_mult:
+                w_new, h_new = h_old, w_old
+            elif is_180_mult:
+                w_new, h_new = w_old, h_old
+            else:
+                w_new = max(0.05, w_old * abs(cos_a) + h_old * abs(sin_a))
+                h_new = max(0.05, w_old * abs(sin_a) + h_old * abs(cos_a))
+
+            self.width_m = round(float(w_new), 4)
+            self.height_m = round(float(h_new), 4)
+
+            # Escalar proporcionalmente los vértices Yb del polígono de chasis
+            if self.chassis_polygon and w_old > 1e-4:
+                scale_y = w_new / w_old
+                cy = self.chassis_center_b[1]
+                for p in self.chassis_polygon:
+                    p[1] = round(float(cy + (p[1] - cy) * scale_y), 4)
+
+        elif p_mode == "L":
+            # Rotación en plano Xb-Zb (Eje Yb / Pitch) -> transforma Largo (Xb) y Alto (Zb)
+            l_old = self.length_m
+            h_old = self.height_m
+
+            is_90_mult = abs(abs(angle_deg) % 180.0 - 90.0) < 1e-3
+            is_180_mult = abs(abs(angle_deg) % 180.0) < 1e-3
+
+            if is_90_mult:
+                l_new, h_new = h_old, l_old
+            elif is_180_mult:
+                l_new, h_new = l_old, h_old
+            else:
+                l_new = max(0.05, l_old * abs(cos_a) + h_old * abs(sin_a))
+                h_new = max(0.05, l_old * abs(sin_a) + h_old * abs(cos_a))
+
+            self.length_m = round(float(l_new), 4)
+            self.height_m = round(float(h_new), 4)
+
+            # Escalar proporcionalmente los vértices Xb del polígono de chasis
+            if self.chassis_polygon and l_old > 1e-4:
+                scale_x = l_new / l_old
+                cx = self.chassis_center_b[0]
+                for p in self.chassis_polygon:
+                    p[0] = round(float(cx + (p[0] - cx) * scale_x), 4)
+
 
     def scale_dimensions(self, factor_l: float, factor_w: float, factor_h: float = 1.0) -> None:
         """Escala las dimensiones y el polígono del chasis respecto a su centroide."""
