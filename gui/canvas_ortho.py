@@ -81,6 +81,16 @@ class OrthoCADCanvas(QWidget):
         self._last_mouse_pos = QPointF(0, 0)
         self._mouse_press_pos = QPointF(0, 0)
 
+        # Objetos de renderizado vectorial en caché para alto rendimiento (60+ FPS)
+        self._pen_grid_minor = QPen(_to_qcolor(COLOR_GRID_MINOR), 1, Qt.DotLine)
+        self._pen_grid_major = QPen(_to_qcolor(COLOR_GRID_MAJOR), 1, Qt.SolidLine)
+        self._font_grid = QFont("Segoe UI", 7)
+        self._pen_grid_text = QPen(QColor(148, 163, 184, 210), 1)
+        self._font_axis = QFont("Segoe UI", 9, QFont.Bold)
+        self._pen_axis_x = QPen(_to_qcolor(COLOR_AXIS_X), 1.5)
+        self._pen_axis_y = QPen(_to_qcolor(COLOR_AXIS_Y), 1.5)
+        self._pen_axis_z = QPen(_to_qcolor(COLOR_AXIS_Z), 1.5)
+
         # Estado de dibujo de chasis (vértices punto a punto y arrastre de caja)
         self._polygon_vertices: List[Tuple[float, float]] = []
         self._current_mouse_pos: Optional[QPointF] = None
@@ -745,12 +755,7 @@ class OrthoCADCanvas(QWidget):
                 break
 
         step_px = step_m * self.scale
-        pen_minor = QPen(_to_qcolor(COLOR_GRID_MINOR), 1, Qt.DotLine)
-        pen_major = QPen(_to_qcolor(COLOR_GRID_MAJOR), 1, Qt.SolidLine)
-
-        font_coord = QFont("Segoe UI", 7)
-        p.setFont(font_coord)
-        col_text = QColor(148, 163, 184, 210) # Pizarra 400 técnico legible sin saturar
+        p.setFont(self._font_grid)
 
         # Determinar rango horizontal
         k_start = int(np.floor((0.0 - cx) / step_px)) - 1
@@ -760,7 +765,7 @@ class OrthoCADCanvas(QWidget):
             x = cx + k * step_px
             if -step_px <= x <= w + step_px:
                 is_major = (k % 5 == 0)
-                p.setPen(pen_major if is_major else pen_minor)
+                p.setPen(self._pen_grid_major if is_major else self._pen_grid_minor)
                 p.drawLine(QPointF(x, 0), QPointF(x, h))
 
                 # Rótulo de coordenada numérica horizontal sin unidad
@@ -777,7 +782,7 @@ class OrthoCADCanvas(QWidget):
                     if lbl.endswith(".0"):
                         lbl = lbl[:-2]
 
-                    p.setPen(QPen(col_text, 1))
+                    p.setPen(self._pen_grid_text)
                     p.drawText(QPointF(x + 3, h - 6), lbl)
 
         # Determinar rango vertical
@@ -788,7 +793,7 @@ class OrthoCADCanvas(QWidget):
             y = cy + m * step_px
             if -step_px <= y <= h + step_px:
                 is_major = (m % 5 == 0)
-                p.setPen(pen_major if is_major else pen_minor)
+                p.setPen(self._pen_grid_major if is_major else self._pen_grid_minor)
                 p.drawLine(QPointF(0, y), QPointF(w, y))
 
                 # Rótulo de coordenada numérica vertical (inversión de eje de pantalla)
@@ -805,7 +810,7 @@ class OrthoCADCanvas(QWidget):
                     if lbl.endswith(".0"):
                         lbl = lbl[:-2]
 
-                    p.setPen(QPen(col_text, 1))
+                    p.setPen(self._pen_grid_text)
                     p.drawText(QPointF(6, y - 3), lbl)
 
     def _draw_axes(self, p: QPainter, cx: float, cy: float):
@@ -1255,6 +1260,7 @@ class OrthoCADWidget(QWidget):
     chassis_updated = Signal()
     sensor_placed = Signal(str, float, float, float)
     sensor_moved = Signal(str, float, float, float)
+    view_changed = Signal(str)
 
     def __init__(self, platform: Platform, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -1448,6 +1454,7 @@ class OrthoCADWidget(QWidget):
         self.btn_l.setChecked(view_key == "L")
         self.canvas_single.view_type = view_key.upper()
         self.canvas_single.update()
+        self.view_changed.emit(view_key.upper())
 
     def set_editing_lock(self, locked: bool):
         """

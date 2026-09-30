@@ -90,15 +90,18 @@ class ToolDialogMoveChassis(BaseToolDialog):
         btn_layout = QHBoxLayout()
         self.btn_apply = QPushButton("Aplicar Traslación")
         self.btn_apply.setStyleSheet("background-color: #0077b6; color: white; font-weight: bold;")
+        self.btn_apply.setFixedHeight(28)
         self.btn_apply.clicked.connect(self._do_apply)
         btn_layout.addWidget(self.btn_apply)
 
         self.btn_center = QPushButton("Centrar a [0, 0, 0]")
+        self.btn_center.setFixedHeight(28)
         self.btn_center.clicked.connect(self.on_center)
         btn_layout.addWidget(self.btn_center)
         layout.addLayout(btn_layout)
 
         self.btn_close = QPushButton("Cerrar")
+        self.btn_close.setFixedHeight(26)
         self.btn_close.clicked.connect(self.hide)
         layout.addWidget(self.btn_close)
 
@@ -127,18 +130,37 @@ class ToolDialogRotateChassis(BaseToolDialog):
         super().__init__("Rotar Chasis - PyGSN", parent)
         self.get_active_view = get_active_view
         self.on_apply = on_apply
-        self.setFixedWidth(320)
+        self.setFixedWidth(340)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
-        self.lbl_axis = QLabel("")
-        self.lbl_axis.setStyleSheet("font-weight: bold; color: #0077b6;")
-        layout.addWidget(self.lbl_axis)
+        # Banner técnico distintivo para identificar el plano y eje activo
+        self.card_info = QFrame()
+        self.card_info.setStyleSheet("""
+            QFrame {
+                background-color: #f0f9ff;
+                border: 1px solid #bae6fd;
+                border-radius: 4px;
+                padding: 6px;
+            }
+        """)
+        card_layout = QVBoxLayout(self.card_info)
+        card_layout.setContentsMargins(8, 6, 8, 6)
+        card_layout.setSpacing(3)
+
+        self.lbl_view_title = QLabel("")
+        self.lbl_view_title.setStyleSheet("font-size: 11px; font-weight: bold; color: #0369a1;")
+        card_layout.addWidget(self.lbl_view_title)
+
+        self.lbl_axis_desc = QLabel("")
+        self.lbl_axis_desc.setStyleSheet("font-size: 10px; font-weight: 500; color: #0284c7;")
+        card_layout.addWidget(self.lbl_axis_desc)
+        layout.addWidget(self.card_info)
 
         form = QFormLayout()
-        form.setVerticalSpacing(6)
+        form.setVerticalSpacing(8)
 
         self.spin_angle = QDoubleSpinBox()
         self.spin_angle.setButtonSymbols(QAbstractSpinBox.NoButtons)
@@ -151,6 +173,7 @@ class ToolDialogRotateChassis(BaseToolDialog):
 
         quick_box = QGroupBox("Giros Ortogonales Rápidos")
         quick_layout = QHBoxLayout(quick_box)
+        quick_layout.setSpacing(8)
         btn_p90 = QPushButton("+90°")
         btn_p90.clicked.connect(lambda: self._quick_rotate(90.0))
         btn_m90 = QPushButton("-90°")
@@ -164,10 +187,12 @@ class ToolDialogRotateChassis(BaseToolDialog):
 
         btn_apply = QPushButton("Aplicar Rotación")
         btn_apply.setStyleSheet("background-color: #0077b6; color: white; font-weight: bold;")
+        btn_apply.setFixedHeight(28)
         btn_apply.clicked.connect(self._do_apply)
         layout.addWidget(btn_apply)
 
         btn_close = QPushButton("Cerrar")
+        btn_close.setFixedHeight(26)
         btn_close.clicked.connect(self.hide)
         layout.addWidget(btn_close)
 
@@ -176,12 +201,14 @@ class ToolDialogRotateChassis(BaseToolDialog):
     def refresh_view_context(self):
         v = self.get_active_view().upper()
         if v == "S":
-            txt = "Vista Superior (S): Rotación en plano Xb-Yb (Eje Zb / Yaw)"
+            self.lbl_view_title.setText("Plano Ortogonal: Vista Superior (S)")
+            self.lbl_axis_desc.setText("Eje de Rotación: Eje Zb (Yaw / Guiñada)")
         elif v == "F":
-            txt = "Vista Frontal (F): Rotación en plano Yb-Zb (Eje Xb / Roll)"
+            self.lbl_view_title.setText("Plano Ortogonal: Vista Frontal (F)")
+            self.lbl_axis_desc.setText("Eje de Rotación: Eje Xb (Roll / Alabeo)")
         else:
-            txt = "Vista Lateral (L): Rotación en plano Xb-Zb (Eje Yb / Pitch)"
-        self.lbl_axis.setText(txt)
+            self.lbl_view_title.setText("Plano Ortogonal: Vista Lateral (L)")
+            self.lbl_axis_desc.setText("Eje de Rotación: Eje Yb (Pitch / Cabeceo)")
 
     def _quick_rotate(self, angle: float):
         v = self.get_active_view().upper()
@@ -240,10 +267,12 @@ class ToolDialogScaleChassis(BaseToolDialog):
 
         btn_apply = QPushButton("Aplicar Escala")
         btn_apply.setStyleSheet("background-color: #0077b6; color: white; font-weight: bold;")
+        btn_apply.setFixedHeight(28)
         btn_apply.clicked.connect(self._do_apply)
         layout.addWidget(btn_apply)
 
         btn_close = QPushButton("Cerrar")
+        btn_close.setFixedHeight(26)
         btn_close.clicked.connect(self.hide)
         layout.addWidget(btn_close)
 
@@ -304,10 +333,12 @@ class ToolDialogSensorMove(BaseToolDialog):
 
         btn_apply = QPushButton("Aplicar a Lever-Arm")
         btn_apply.setStyleSheet("background-color: #b45309; color: white; font-weight: bold;")
+        btn_apply.setFixedHeight(28)
         btn_apply.clicked.connect(self._do_apply)
         layout.addWidget(btn_apply)
 
         btn_close = QPushButton("Cerrar")
+        btn_close.setFixedHeight(26)
         btn_close.clicked.connect(self.hide)
         layout.addWidget(btn_close)
 
@@ -370,10 +401,12 @@ class ToolDialogSensorRotate(BaseToolDialog):
 
         btn_apply = QPushButton("Aplicar a Boresight")
         btn_apply.setStyleSheet("background-color: #b45309; color: white; font-weight: bold;")
+        btn_apply.setFixedHeight(28)
         btn_apply.clicked.connect(self._do_apply)
         layout.addWidget(btn_apply)
 
         btn_close = QPushButton("Cerrar")
+        btn_close.setFixedHeight(26)
         btn_close.clicked.connect(self.hide)
         layout.addWidget(btn_close)
 

@@ -85,12 +85,17 @@ PyGSN/
 │   ├── models.py                # Clases Sensor y Platform para rigs universales (.txt / .json)
 │   ├── georeferencing.py        # Motor de georreferenciación y actitud multi-sensor
 │   └── reporting.py             # Generador de informes técnicos paso a paso (.txt)
-├── gui/                         # Capa de Interfaz Gráfica (DearPyGui)
-│   ├── theme.py                 # Paleta oscura técnica de alto contraste
-│   ├── views_ortho.py           # Lienzo de las 3 vistas ortogonales 2D sobre grid
-│   ├── editor.py                # Panel para dimensionar plataforma y añadir sensores
-│   ├── panel_georeferencing.py  # Panel de georreferenciación, observaciones y visor TXT
-│   └── app.py                   # Ensamblador del viewport y ventana principal
+├── gui/                         # Capa de Interfaz Gráfica (PySide6 / Qt6)
+│   ├── app.py                   # Ventana principal y máquina de estados de edición
+│   ├── canvas_ortho.py          # Lienzo vectorial CAD 2D ortogonal (S, F, L) con snapping
+│   ├── dialogs.py               # Diálogos modales estándar (Proyectos, Plataforma, Sensores)
+│   ├── dialogs_tools.py         # Diálogos flotantes no modales de transformación
+│   ├── dock_console.py          # Terminal CLI interactiva integrada bidireccional
+│   ├── dock_hierarchy.py        # Árbol de capas y jerarquía semántica del proyecto
+│   ├── panel_georeferencing.py  # Panel de georreferenciación y solver multi-sensor
+│   ├── panel_kinematics.py      # Panel de simulación cinemática y trayectorias
+│   ├── panel_report.py          # Visor técnico monospaced de reportes de cálculo
+│   └── theme.py                 # Tema claro CAD, estilos QSS y API DWM de Windows
 ├── data/                        # Ficheros de calibración y observaciones de prueba
 │   ├── calibracion_vehiculo.txt # Calibración geométrica del chasis y sensores en b-frame
 │   └── observaciones_sensores.txt # Observaciones geodésicas GNSS e inerciales INS

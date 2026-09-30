@@ -547,7 +547,9 @@ class PyGSNMainWindow(QMainWindow):
         self.is_dirty = True
         if plat_id in self.platform_canvases:
             self.platform_canvases[plat_id].redraw_all()
-        self.lbl_status_state.setText(f"[Rotar] Chasis rotado {angle_deg:+.1f}° en plano {plane}")
+        plane_axis_map = {"S": "Zb (Yaw)", "F": "Xb (Roll)", "L": "Yb (Pitch)"}
+        axis_name = plane_axis_map.get(plane.upper(), plane)
+        self.lbl_status_state.setText(f"[Rotar] Chasis rotado {angle_deg:+.1f}° en plano {plane} (Eje {axis_name})")
 
     def _show_scale_tool_dialog(self):
         plat_id = self.editing_platform_id
@@ -1025,6 +1027,7 @@ class PyGSNMainWindow(QMainWindow):
         widget.chassis_updated.connect(lambda pid=plat_id: self._on_canvas_chassis_updated(pid))
         widget.sensor_placed.connect(lambda code, x, y, z, pid=plat_id: self._on_canvas_sensor_placed(pid, code, x, y, z))
         widget.sensor_moved.connect(lambda code, x, y, z, pid=plat_id: self._on_canvas_sensor_moved(pid, code, x, y, z))
+        widget.view_changed.connect(lambda v, pid=plat_id: self._on_canvas_view_changed(pid, v))
         self.platform_canvases[plat_id] = widget
         idx = self.workspace.addTab(widget, tab_title)
         self.workspace.setCurrentIndex(idx)
@@ -1047,6 +1050,11 @@ class PyGSNMainWindow(QMainWindow):
                 self.is_dirty = True
                 self.hierarchy_dock.rebuild_tree()
                 self.lbl_status_state.setText(f"[Sensor] {code} desplazado a [{x:.3f}, {y:.3f}, {z:.3f}]m")
+
+    def _on_canvas_view_changed(self, plat_id: str, view_key: str):
+        """Notifica al diálogo de rotación el cambio de vista activa para actualizar plano y eje en tiempo real."""
+        if self.tool_dlg_rot and self.tool_dlg_rot.isVisible():
+            self.tool_dlg_rot.refresh_view_context()
 
     def _on_cli_chassis_modified(self):
         self.on_project_changed()
