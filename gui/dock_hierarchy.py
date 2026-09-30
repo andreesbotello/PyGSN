@@ -43,6 +43,8 @@ class HierarchyDock(QDockWidget):
 
         self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self.setMinimumWidth(260)
+        self.editing_platform_id: Optional[str] = None
+        self.editing_sensor_code: Optional[str] = None
 
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -59,6 +61,12 @@ class HierarchyDock(QDockWidget):
 
         layout.addWidget(self.tree)
         self.setWidget(widget)
+
+    def set_editing_context(self, plat_id: Optional[str], sensor_code: Optional[str] = None):
+        """Actualiza el contexto de edición para destacar con un '*' la capa en modificación activa."""
+        self.editing_platform_id = plat_id
+        self.editing_sensor_code = sensor_code
+        self.rebuild_tree()
 
     def rebuild_tree(self):
         """Reconstruye el árbol de capas jerárquico: Proyecto -> Plataformas -> Sensores."""
@@ -89,15 +97,22 @@ class HierarchyDock(QDockWidget):
 
         for plat_id, plat in proj.platforms.items():
             is_active = (plat_id == proj.active_platform_id)
+            is_editing_plat = (plat_id == self.editing_platform_id)
             tag_active = " [Activa]" if is_active else ""
             type_tag = f"[{plat.platform_type[:4]}]"
-            label = f"Plataforma: {plat.name} {type_tag}{tag_active}"
+            edit_star = "* " if is_editing_plat else ""
+            label = f"{edit_star}Plataforma: {plat.name} {type_tag}{tag_active}"
 
             plat_item = QTreeWidgetItem(root, [label])
             plat_item.setData(0, Qt.UserRole, {"type": "platform", "plat_id": plat_id})
             if icon_dron.exists():
                 plat_item.setIcon(0, QIcon(str(icon_dron)))
-            if is_active:
+            if is_editing_plat:
+                f = plat_item.font(0)
+                f.setBold(True)
+                plat_item.setFont(0, f)
+                plat_item.setForeground(0, QColor(220, 38, 38)) # Rojo para edición activa
+            elif is_active:
                 f = plat_item.font(0)
                 f.setBold(True)
                 plat_item.setFont(0, f)
@@ -107,7 +122,8 @@ class HierarchyDock(QDockWidget):
 
             # Chasis
             dim_str = f"({plat.length_m:.2f}x{plat.width_m:.2f}x{plat.height_m:.2f}m)" if plat.has_dimensions else "(libre)"
-            chassis_item = QTreeWidgetItem(plat_item, [f"Chasis {dim_str}"])
+            chassis_label = f"{'* ' if is_editing_plat else ''}Chasis {dim_str}"
+            chassis_item = QTreeWidgetItem(plat_item, [chassis_label])
             chassis_item.setData(0, Qt.UserRole, {"type": "chassis", "plat_id": plat_id})
             if icon_chasis.exists():
                 chassis_item.setIcon(0, QIcon(str(icon_chasis)))
@@ -122,9 +138,16 @@ class HierarchyDock(QDockWidget):
             sens_root.setForeground(0, QColor(71, 85, 105))
 
             for code, s in plat.sensors.items():
-                s_label = f"{code:<6s} [{s.sensor_type.value[:3]}] {s.name}"
+                is_editing_sens = (plat_id == self.editing_platform_id and code == self.editing_sensor_code)
+                sens_star = "* " if is_editing_sens else ""
+                s_label = f"{sens_star}{code:<6s} [{s.sensor_type.value[:3]}] {s.name}"
                 s_item = QTreeWidgetItem(sens_root, [s_label])
                 s_item.setData(0, Qt.UserRole, {"type": "sensor", "plat_id": plat_id, "code": code})
+                if is_editing_sens:
+                    f = s_item.font(0)
+                    f.setBold(True)
+                    s_item.setFont(0, f)
+
                 # Asignar icono y color de texto contrastado según tipo
                 stype_name = s.sensor_type.value
                 if "GNSS" in stype_name:
@@ -248,3 +271,12 @@ class HierarchyDock(QDockWidget):
             del plat.sensors[code]
             self.rebuild_tree()
             self.on_project_changed()
+
+    def get_selected_sensor_code(self) -> Optional[str]:
+        """Devuelve el código del sensor seleccionado en el árbol de capas, o None."""
+        item = self.tree.currentItem()
+        if item:
+            data = item.data(0, Qt.UserRole)
+            if data and data.get("type") == "sensor":
+                return data.get("code")
+        return None
