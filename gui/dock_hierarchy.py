@@ -7,22 +7,25 @@ Panel lateral de capas con árbol jerárquico nativo:
 - Clic derecho sobre chasis y sensores.
 """
 
+from pathlib import Path
 from typing import Callable, Optional
 from PySide6.QtWidgets import (
     QDockWidget, QTreeWidget, QTreeWidgetItem, QMenu, QWidget,
     QVBoxLayout, QMessageBox
 )
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont
+from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtGui import QAction, QColor, QFont, QIcon
 
 from core.project import Project
 
+ICONS_DIR = Path(__file__).resolve().parent.parent / "icons"
+
 
 class HierarchyDock(QDockWidget):
-    """Panel de capas y jerarquía con QTreeWidget nativo."""
+    """Panel de capas y jerarquía con QTreeWidget nativo e iconografía vectorial."""
 
     platform_activated = Signal(str)      # plat_id
-    chassis_clicked = Signal(str)         # plat_id
+    chassis_clicked = Signal(str)         # plat_id (mantenido por compatibilidad)
     sensor_selected = Signal(str, str)    # plat_id, sensor_code
     center_origin_requested = Signal(str) # plat_id
     center_centroid_requested = Signal(str) # plat_id
@@ -43,10 +46,12 @@ class HierarchyDock(QDockWidget):
 
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(2, 2, 2, 2)
 
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
+        self.tree.setIndentation(12)
+        self.tree.setIconSize(QSize(16, 16))
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.itemClicked.connect(self._on_item_clicked)
@@ -62,55 +67,78 @@ class HierarchyDock(QDockWidget):
 
         root = QTreeWidgetItem(self.tree, [f"Proyecto: {proj.name}"])
         root.setData(0, Qt.UserRole, {"type": "project"})
+        logo_icon = ICONS_DIR / "Logo.svg"
+        if logo_icon.exists():
+            root.setIcon(0, QIcon(str(logo_icon)))
         font_root = root.font(0)
         font_root.setBold(True)
         root.setFont(0, font_root)
-        root.setForeground(0, QColor(0, 180, 216))
+        root.setForeground(0, QColor(0, 119, 182))
 
         if not proj.platforms:
             empty_item = QTreeWidgetItem(root, ["(No hay plataformas cargadas)"])
-            empty_item.setForeground(0, QColor(140, 150, 165))
+            empty_item.setForeground(0, QColor(108, 117, 125))
             root.setExpanded(True)
             return
 
+        icon_dron = ICONS_DIR / "Dron.svg"
+        icon_chasis = ICONS_DIR / "Chasis.svg"
+        icon_sensor = ICONS_DIR / "Sensor.svg"
+        icon_gps = ICONS_DIR / "GPS.svg"
+        icon_camara = ICONS_DIR / "Camara.svg"
+
         for plat_id, plat in proj.platforms.items():
             is_active = (plat_id == proj.active_platform_id)
-            tag_active = " [*Activa]" if is_active else ""
+            tag_active = " [Activa]" if is_active else ""
             type_tag = f"[{plat.platform_type[:4]}]"
             label = f"Plataforma: {plat.name} {type_tag}{tag_active}"
 
             plat_item = QTreeWidgetItem(root, [label])
             plat_item.setData(0, Qt.UserRole, {"type": "platform", "plat_id": plat_id})
+            if icon_dron.exists():
+                plat_item.setIcon(0, QIcon(str(icon_dron)))
             if is_active:
                 f = plat_item.font(0)
                 f.setBold(True)
                 plat_item.setFont(0, f)
-                plat_item.setForeground(0, QColor(255, 209, 102))
+                plat_item.setForeground(0, QColor(180, 83, 9))
+            else:
+                plat_item.setForeground(0, QColor(30, 41, 59))
 
             # Chasis
             dim_str = f"({plat.length_m:.2f}x{plat.width_m:.2f}x{plat.height_m:.2f}m)" if plat.has_dimensions else "(libre)"
             chassis_item = QTreeWidgetItem(plat_item, [f"Chasis {dim_str}"])
             chassis_item.setData(0, Qt.UserRole, {"type": "chassis", "plat_id": plat_id})
-            chassis_item.setForeground(0, QColor(72, 202, 228))
+            if icon_chasis.exists():
+                chassis_item.setIcon(0, QIcon(str(icon_chasis)))
+            chassis_item.setForeground(0, QColor(2, 132, 199))
 
             # Sensores montados
             n_sens = len(plat.sensors)
             sens_root = QTreeWidgetItem(plat_item, [f"Sensores ({n_sens})"])
             sens_root.setData(0, Qt.UserRole, {"type": "sensors_group", "plat_id": plat_id})
-            sens_root.setForeground(0, QColor(180, 190, 205))
+            if icon_sensor.exists():
+                sens_root.setIcon(0, QIcon(str(icon_sensor)))
+            sens_root.setForeground(0, QColor(71, 85, 105))
 
             for code, s in plat.sensors.items():
-                s_label = f"[*] {code:<6s} [{s.sensor_type.value[:3]}] {s.name}"
+                s_label = f"{code:<6s} [{s.sensor_type.value[:3]}] {s.name}"
                 s_item = QTreeWidgetItem(sens_root, [s_label])
                 s_item.setData(0, Qt.UserRole, {"type": "sensor", "plat_id": plat_id, "code": code})
-                # Colores según tipo
+                # Asignar icono y color de texto contrastado según tipo
                 stype_name = s.sensor_type.value
                 if "GNSS" in stype_name:
-                    s_item.setForeground(0, QColor(255, 209, 102))
-                elif "INS" in stype_name or "IMU" in stype_name:
-                    s_item.setForeground(0, QColor(6, 214, 160))
+                    if icon_gps.exists():
+                        s_item.setIcon(0, QIcon(str(icon_gps)))
+                    s_item.setForeground(0, QColor(194, 65, 12))
                 elif "CAM" in stype_name:
-                    s_item.setForeground(0, QColor(247, 37, 133))
+                    if icon_camara.exists():
+                        s_item.setIcon(0, QIcon(str(icon_camara)))
+                    s_item.setForeground(0, QColor(219, 39, 119))
+                else:
+                    if icon_sensor.exists():
+                        s_item.setIcon(0, QIcon(str(icon_sensor)))
+                    s_item.setForeground(0, QColor(5, 150, 105))
 
             plat_item.setExpanded(True)
             sens_root.setExpanded(True)
@@ -130,7 +158,10 @@ class HierarchyDock(QDockWidget):
             proj.set_active_platform(plat_id)
             self.platform_activated.emit(plat_id)
         elif itype == "chassis" and plat_id:
-            self.chassis_clicked.emit(plat_id)
+            # Clic directo sobre chasis activa la plataforma en Workspace sin ventana modal emergente
+            proj = self.get_project()
+            proj.set_active_platform(plat_id)
+            self.platform_activated.emit(plat_id)
         elif itype == "sensor" and plat_id:
             code = data.get("code")
             self.sensor_selected.emit(plat_id, code)

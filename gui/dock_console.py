@@ -6,7 +6,8 @@ Terminal interactiva CLI integrada en un dock desacoplable:
 - Historial de comandos navegable con flechas arriba/abajo.
 """
 
-from typing import Callable, Optional, List
+import re
+from typing import Callable, Optional, List, Any
 from PySide6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit,
     QLineEdit, QPushButton, QLabel
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QTextCursor
 
+from core.models import Platform
 from core.project import Project
 
 
@@ -23,6 +25,8 @@ class ConsoleDock(QDockWidget):
     solve_requested = Signal()
     diagnostics_requested = Signal()
     residuals_requested = Signal()
+    chassis_modified = Signal()
+    platform_created = Signal(str)
 
     def __init__(
         self,
@@ -37,7 +41,7 @@ class ConsoleDock(QDockWidget):
         self.history_idx: int = -1
 
         self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea | Qt.BottomDockWidgetArea)
-        self.setMinimumWidth(300)
+        self.setMinimumWidth(320)
 
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -47,18 +51,18 @@ class ConsoleDock(QDockWidget):
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
         self.output.setStyleSheet(
-            "background-color: #121418; color: #a9b7c6; font-family: 'Consolas', 'Courier New', monospace; font-size: 11px; border: 1px solid #2d313d;"
+            "background-color: #ffffff; color: #1e293b; font-family: 'Consolas', 'Courier New', monospace; font-size: 11px; border: 1px solid #ced4da;"
         )
         layout.addWidget(self.output)
 
         input_layout = QHBoxLayout()
         prompt_lbl = QLabel("pygsn>")
-        prompt_lbl.setStyleSheet("color: #00b4d8; font-weight: bold; font-family: monospace;")
+        prompt_lbl.setStyleSheet("color: #0077b6; font-weight: bold; font-family: monospace;")
         input_layout.addWidget(prompt_lbl)
 
         self.input_cmd = QLineEdit()
         self.input_cmd.setStyleSheet(
-            "background-color: #1a1c24; color: #ffffff; font-family: 'Consolas', monospace; border: 1px solid #3b4252;"
+            "background-color: #f8f9fa; color: #1e293b; font-family: 'Consolas', monospace; border: 1px solid #ced4da;"
         )
         self.input_cmd.returnPressed.connect(self._on_command_entered)
         input_layout.addWidget(self.input_cmd)
@@ -93,15 +97,22 @@ class ConsoleDock(QDockWidget):
         root_cmd = parts[0].lower()
 
         if root_cmd in ("help", "?"):
-            self.print_line("Comandos disponibles:")
-            self.print_line("  help       : Muestra esta ayuda")
-            self.print_line("  status     : Estado del proyecto, plataforma y geodesia")
-            self.print_line("  platforms  : Lista las plataformas cargadas")
-            self.print_line("  sensors    : Lista los sensores de la plataforma activa")
-            self.print_line("  solve      : Ejecuta el solver SVD de georreferenciación")
-            self.print_line("  residuals  : Inspecciona los residuales del último cálculo")
-            self.print_line("  diag       : Auditoría espectral y diagnóstico de matrices")
-            self.print_line("  clear      : Limpia la pantalla de la consola\n")
+            self.print_line("Comandos disponibles en PyGSN CLI:")
+            self.print_line("  help                           : Muestra esta ayuda")
+            self.print_line("  status                         : Estado del proyecto, plataforma y geodesia")
+            self.print_line("  platforms                      : Lista las plataformas del proyecto")
+            self.print_line("  platform add <id> [nombre]     : Crea y activa una plataforma en el workspace")
+            self.print_line("  platform select <id>           : Activa una plataforma existente")
+            self.print_line("  chassis                        : Consulta el chasis de la plataforma activa")
+            self.print_line("  chassis box <L> <W> <H>        : Define caja envolvente 3D (Largo, Ancho, Alto en m)")
+            self.print_line("  chassis poly [S|F|L] (p1) (p2) : Define polígono 2D por vértices (ej: poly S (2,-1) (2,1) (-2,1) (-2,-1))")
+            self.print_line("  chassis pts (x,y,z) ...        : Define vértices 3D con proyección automática a S, F, L")
+            self.print_line("  chassis clear                  : Elimina el chasis (modo chasis libre)")
+            self.print_line("  sensors                        : Lista los sensores de la plataforma activa")
+            self.print_line("  solve                          : Ejecuta el solver SVD de georreferenciación")
+            self.print_line("  residuals                      : Inspecciona los residuales del cálculo")
+            self.print_line("  diag                           : Auditoría espectral y diagnóstico DCM")
+            self.print_line("  clear                          : Limpia la pantalla de la terminal\n")
 
         elif root_cmd == "status":
             proj = self.get_project()
@@ -112,6 +123,9 @@ class ConsoleDock(QDockWidget):
             n_sens = len(plat.sensors) if plat else 0
             self.print_line(f"Sensores : {n_sens}\n")
 
+        elif root_cmd in ("platform", "plat"):
+            self._handle_platform_command(parts[1:])
+
         elif root_cmd == "platforms":
             proj = self.get_project()
             if not proj.platforms:
@@ -120,8 +134,12 @@ class ConsoleDock(QDockWidget):
             self.print_line(f"Total plataformas: {len(proj.platforms)}")
             for pid, p in proj.platforms.items():
                 active_mark = " [*ACTIVA]" if pid == proj.active_platform_id else ""
-                self.print_line(f"  [{pid}] {p.name} ({p.platform_type}){active_mark}")
+                dims_str = f" [L={p.length_m:.2f}m, W={p.width_m:.2f}m, H={p.height_m:.2f}m]" if p.has_dimensions else " [Chasis libre]"
+                self.print_line(f"  [{pid}] {p.name} ({p.platform_type}){dims_str}{active_mark}")
             self.print_line("")
+
+        elif root_cmd == "chassis":
+            self._handle_chassis_command(cmd, parts[1:])
 
         elif root_cmd == "sensors":
             proj = self.get_project()
@@ -153,3 +171,198 @@ class ConsoleDock(QDockWidget):
 
         else:
             self.print_line(f"Comando desconocido: '{root_cmd}'. Escriba 'help'.\n")
+
+    def _handle_platform_command(self, args: List[str]):
+        proj = self.get_project()
+        if not args:
+            self.print_line("Uso de comando platform:")
+            self.print_line("  platform add <id> [nombre] [tipo]")
+            self.print_line("  platform select <id>\n")
+            return
+
+        sub = args[0].lower()
+        if sub in ("add", "create", "new"):
+            if len(args) < 2:
+                self.print_line("Error: Debe indicar al menos el identificador (ej: platform add V1 'Vehiculo 1').\n")
+                return
+            pid = args[1].upper()
+            pname = args[2] if len(args) >= 3 else pid
+            ptype = args[3].upper() if len(args) >= 4 else "VEHICLE"
+            if pid in proj.platforms:
+                self.print_line(f"Aviso: La plataforma '{pid}' ya existe. Seleccionándola como activa.")
+            else:
+                plat = Platform(id=pid, name=pname, platform_type=ptype)
+                proj.add_platform(plat)
+                self.print_line(f"[OK] Plataforma creada: [{pid}] {pname} ({ptype})")
+            proj.set_active_platform(pid)
+            self.platform_created.emit(pid)
+            self.print_line(f"[OK] Plataforma '{pid}' activada en el Workspace CAD.\n")
+
+        elif sub in ("select", "use", "open"):
+            if len(args) < 2:
+                self.print_line("Error: Indique el identificador (ej: platform select PLAT_1).\n")
+                return
+            pid = args[1].upper()
+            if pid not in proj.platforms:
+                self.print_line(f"Error: La plataforma '{pid}' no existe en el proyecto.\n")
+                return
+            proj.set_active_platform(pid)
+            self.platform_created.emit(pid)
+            self.print_line(f"[OK] Plataforma activa conmutada a '{pid}'.\n")
+
+        else:
+            self.print_line(f"Subcomando desconocido: 'platform {sub}'. Escriba 'help'.\n")
+
+    def _handle_chassis_command(self, full_cmd: str, args: List[str]):
+        proj = self.get_project()
+        plat = proj.platform
+        if not plat:
+            self.print_line("Error: No hay plataforma activa. Cree o active una con 'platform add <id>'.\n")
+            return
+
+        if not args:
+            # Mostrar información del chasis activo
+            if not plat.has_dimensions:
+                self.print_line(f"Plataforma '{plat.name}': Chasis Libre (sin dimensiones ni caja envolvente).")
+                self.print_line("Para definir chasis use:")
+                self.print_line("  chassis box <Largo> <Ancho> <Alto>              (ej: chassis box 4.2 1.8 1.4)")
+                self.print_line("  chassis poly S (x1,y1) (x2,y2) (x3,y3) (x4,y4)  (ej: chassis poly S (2,-1) (2,1) (-2,1) (-2,-1))")
+                self.print_line("  chassis pts (x,y,z) ...                         (vértices 3D con proyección a 3 vistas)\n")
+            else:
+                self.print_line(f"Chasis activo en '{plat.name}':")
+                self.print_line(f"  Dimensiones Envolventes : Largo={plat.length_m:.3f}m, Ancho={plat.width_m:.3f}m, Alto={plat.height_m:.3f}m")
+                if plat.chassis_polygon:
+                    pts_str = " -> ".join([f"[{p[0]:+.2f}, {p[1]:+.2f}]" for p in plat.chassis_polygon])
+                    self.print_line(f"  Polígono 2D Planta (S)  : {len(plat.chassis_polygon)} vértices: {pts_str}")
+                else:
+                    self.print_line("  Tipo                    : Caja envolvente rectangular centrada en [0, 0, 0]")
+                self.print_line("")
+            return
+
+        sub = args[0].lower()
+
+        # 1. Limpieza de chasis
+        if sub in ("clear", "reset", "free", "none"):
+            plat.has_dimensions = False
+            plat.length_m = 0.0
+            plat.width_m = 0.0
+            plat.height_m = 0.0
+            plat.chassis_polygon = None
+            self.chassis_modified.emit()
+            self.print_line(f"[OK] Chasis eliminado en '{plat.name}'. Plataforma en modo chasis libre.\n")
+            return
+
+        # 2. Caja envolvente rectangular directa: chassis box <L> <W> <H> o chassis dims <L> <W> <H>
+        if sub in ("box", "dims", "caja") or (len(args) >= 3 and self._is_float(args[0]) and self._is_float(args[1]) and self._is_float(args[2])):
+            num_args = args[1:] if sub in ("box", "dims", "caja") else args
+            if len(num_args) < 3:
+                self.print_line("Error: Debe indicar 3 dimensiones numéricas: Largo Ancho Alto (ej: chassis box 4.2 1.8 1.4).\n")
+                return
+            try:
+                l = abs(float(num_args[0]))
+                w = abs(float(num_args[1]))
+                h = abs(float(num_args[2]))
+                plat.length_m = round(l, 4)
+                plat.width_m = round(w, 4)
+                plat.height_m = round(h, 4)
+                plat.has_dimensions = True
+                plat.chassis_polygon = None
+                self.chassis_modified.emit()
+                self.print_line(f"[OK] Chasis definido para '{plat.name}':")
+                self.print_line(f"     Largo Xb={l:.3f}m | Ancho Yb={w:.3f}m | Alto Zb={h:.3f}m")
+                self.print_line("     Proyectado simétricamente a las vistas Superior, Frontal y Lateral.\n")
+            except ValueError:
+                self.print_line("Error: Las dimensiones deben ser valores numéricos válidos en metros.\n")
+            return
+
+        # 3. Polígono por coordenadas 2D en una vista: chassis poly [S|F|L] (p1) (p2) ...
+        if sub in ("poly", "poligono", "polygon"):
+            view_code = "S"
+            tokens_str = full_cmd
+            # Verificar si se especificó vista (S, F o L)
+            if len(args) >= 2 and args[1].upper() in ("S", "F", "L"):
+                view_code = args[1].upper()
+
+            # Extraer todas las tuplas de números (x, y) del comando
+            matches = re.findall(
+                r'\(?\s*([+-]?\d+(?:\.\d+)?)\s*,\s*([+-]?\d+(?:\.\d+)?)(?:\s*,\s*([+-]?\d+(?:\.\d+)?))?\s*\)?',
+                tokens_str
+            )
+            if len(matches) < 3:
+                self.print_line("Error: Un contorno poligonal requiere al menos 3 vértices.")
+                self.print_line("Ejemplo: chassis poly S (2, -1) (2, 1) (-2, 1) (-2, -1)\n")
+                return
+
+            pts_2d = [(float(m[0]), float(m[1])) for m in matches]
+            u_vals = [p[0] for p in pts_2d]
+            v_vals = [p[1] for p in pts_2d]
+            extent_u = max(0.05, max(u_vals) - min(u_vals))
+            extent_v = max(0.05, max(v_vals) - min(v_vals))
+
+            prev_h = plat.height_m if plat.has_dimensions and plat.height_m > 0 else 0.50
+            prev_l = plat.length_m if plat.has_dimensions and plat.length_m > 0 else 2.00
+            prev_w = plat.width_m if plat.has_dimensions and plat.width_m > 0 else 1.00
+
+            if view_code == "S":
+                # u = Xb (Largo), v = Yb (Ancho)
+                plat.length_m = round(extent_u, 4)
+                plat.width_m = round(extent_v, 4)
+                plat.height_m = round(prev_h, 4)
+                plat.chassis_polygon = [[p[0], p[1]] for p in pts_2d]
+                view_name = "Superior (Planta: Xb vs Yb)"
+            elif view_code == "F":
+                # u = Yb (Ancho), v = Zb (Alto)
+                plat.width_m = round(extent_u, 4)
+                plat.height_m = round(extent_v, 4)
+                plat.length_m = round(prev_l, 4)
+                view_name = "Frontal (Alzado: Yb vs -Zb)"
+            else: # L
+                # u = Xb (Largo), v = Zb (Alto)
+                plat.length_m = round(extent_u, 4)
+                plat.height_m = round(extent_v, 4)
+                plat.width_m = round(prev_w, 4)
+                view_name = "Lateral (Perfil: Xb vs -Zb)"
+
+            plat.has_dimensions = True
+            self.chassis_modified.emit()
+            self.print_line(f"[OK] Polígono de chasis definido ({len(pts_2d)} vértices) en vista {view_name}:")
+            self.print_line(f"     Dimensiones envolventes: Largo={plat.length_m:.3f}m, Ancho={plat.width_m:.3f}m, Alto={plat.height_m:.3f}m")
+            self.print_line("     Geometría proyectada instantáneamente a las 3 vistas ortogonales del Workspace.\n")
+            return
+
+        # 4. Puntos 3D globales: chassis pts (x, y, z) (x, y, z) ...
+        if sub in ("pts", "puntos", "points", "3d"):
+            matches_3d = re.findall(
+                r'\(?\s*([+-]?\d+(?:\.\d+)?)\s*,\s*([+-]?\d+(?:\.\d+)?)\s*,\s*([+-]?\d+(?:\.\d+)?)\s*\)?',
+                full_cmd
+            )
+            if len(matches_3d) < 3:
+                self.print_line("Error: Debe proporcionar al menos 3 puntos en formato 3D (X, Y, Z).")
+                self.print_line("Ejemplo: chassis pts (2, -1, 0) (2, 1, 0) (-2, 1, 0.5) (-2, -1, 0.5)\n")
+                return
+
+            pts_3d = [(float(m[0]), float(m[1]), float(m[2])) for m in matches_3d]
+            xs = [p[0] for p in pts_3d]
+            ys = [p[1] for p in pts_3d]
+            zs = [p[2] for p in pts_3d]
+            plat.length_m = round(max(0.05, max(xs) - min(xs)), 4)
+            plat.width_m = round(max(0.05, max(ys) - min(ys)), 4)
+            plat.height_m = round(max(0.05, max(zs) - min(zs)), 4)
+            plat.chassis_polygon = [[p[0], p[1]] for p in pts_3d] # Proyección a planta
+            plat.has_dimensions = True
+            self.chassis_modified.emit()
+            self.print_line(f"[OK] Chasis definido a partir de {len(pts_3d)} puntos 3D:")
+            self.print_line(f"     Largo={plat.length_m:.3f}m, Ancho={plat.width_m:.3f}m, Alto={plat.height_m:.3f}m")
+            self.print_line("     Proyectado a las vistas Superior, Frontal y Lateral.\n")
+            return
+
+        self.print_line(f"Subcomando de chasis desconocido: '{sub}'. Escriba 'help' o 'chassis' sin argumentos.\n")
+
+    @staticmethod
+    def _is_float(s: str) -> bool:
+        try:
+            float(s)
+            return True
+        except ValueError:
+            return False
+

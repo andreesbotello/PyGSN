@@ -25,6 +25,7 @@ if %errorlevel% neq 0 (
 python -c "import numpy, scipy, PySide6" >nul 2>nul
 if %errorlevel% equ 0 (
     set "PYTHON_EXE=python"
+    set "PYTHONW_EXE=pythonw"
     goto :RUN_APP
 )
 
@@ -43,13 +44,20 @@ if not exist ".venv\Scripts\python.exe" (
     echo.
 )
 set "PYTHON_EXE=.venv\Scripts\python"
+set "PYTHONW_EXE=.venv\Scripts\pythonw"
 
 :RUN_APP
-echo [INFO] Iniciando PyGSN...
-%PYTHON_EXE% main.py %*
-
-if %errorlevel% neq 0 (
-    echo.
-    echo [ERROR] La aplicacion ha finalizado con codigo de error %errorlevel%.
-    pause
+if "%~1"=="" (
+    :: Modo Interfaz Grafica: Ejecutar silenciosamente sin consola residual
+    start "" "%PYTHONW_EXE%" main.py
+    exit /b 0
+) else (
+    :: Modo Linea de Comandos (CLI / Tests / Proyectos)
+    echo [INFO] Iniciando PyGSN en modo consola...
+    "%PYTHON_EXE%" main.py %*
+    if %errorlevel% neq 0 (
+        echo.
+        echo [ERROR] La aplicacion ha finalizado con codigo de error %errorlevel%.
+        pause
+    )
 )

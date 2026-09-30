@@ -76,15 +76,15 @@ class GeoreferencingWidget(QWidget):
         res_vbox = QVBoxLayout(grp_res)
 
         self.lbl_sol_attitude = QLabel("Actitud GNSS (Cb2n): Sin resolver")
-        self.lbl_sol_attitude.setStyleSheet("color: #ffd166; font-weight: bold;")
+        self.lbl_sol_attitude.setStyleSheet("color: #b45309; font-weight: bold;")
         res_vbox.addWidget(self.lbl_sol_attitude)
 
         self.lbl_sol_origin = QLabel("Origen PLA: Sin resolver")
-        self.lbl_sol_origin.setStyleSheet("color: #00b4d8; font-weight: bold;")
+        self.lbl_sol_origin.setStyleSheet("color: #0077b6; font-weight: bold;")
         res_vbox.addWidget(self.lbl_sol_origin)
 
         self.lbl_sol_ins = QLabel("Actitud Total INS: Sin resolver")
-        self.lbl_sol_ins.setStyleSheet("color: #06d6a0; font-weight: bold;")
+        self.lbl_sol_ins.setStyleSheet("color: #059669; font-weight: bold;")
         res_vbox.addWidget(self.lbl_sol_ins)
 
         self.table_residuals = QTableWidget(0, 4)
