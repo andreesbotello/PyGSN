@@ -15,7 +15,8 @@ from typing import Optional, Dict
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QToolBar, QToolButton,
-    QStatusBar, QLabel, QFileDialog, QMessageBox, QWidget, QDockWidget
+    QStatusBar, QLabel, QFileDialog, QMessageBox, QWidget, QDockWidget,
+    QDoubleSpinBox, QComboBox, QAbstractSpinBox
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QIcon, QKeySequence
@@ -24,7 +25,7 @@ from core.models import Platform
 from core.project import Project
 from core.georeferencing import create_reference_platform
 
-from gui.theme import apply_pyside_theme
+from gui.theme import apply_pyside_theme, set_window_titlebar_light
 from gui.dock_hierarchy import HierarchyDock
 from gui.dock_console import ConsoleDock
 from gui.canvas_ortho import OrthoCADWidget
@@ -50,10 +51,10 @@ class PyGSNMainWindow(QMainWindow):
         self.panel_report: Optional[ReportViewerWidget] = None
         self.panel_kinematics: Optional[KinematicsWidget] = None
 
-        # Modos de edición de barra de herramientas
+        # Modos de edición de barra de herramientas (Mover por defecto)
         self.platform_edit_mode: bool = False
         self.sensor_edit_mode: bool = False
-        self.active_platform_tool: str = "Seleccionar"
+        self.active_platform_tool: str = "Mover"
         self.active_sensor_tool: str = "Seleccionar"
 
         self._init_window()
@@ -70,6 +71,21 @@ class PyGSNMainWindow(QMainWindow):
         self.resize(1440, 900)
         self.setMinimumSize(1100, 700)
 
+        # Icono de ventana
+        icons_dir = Path(__file__).resolve().parent.parent / "icons"
+        icon_path = icons_dir / "Logo.ico"
+        if not icon_path.exists():
+            icon_path = icons_dir / "Logo.svg"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
+
+        # Barra de ventana nativa de Windows en modo claro
+        set_window_titlebar_light(self)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_window_titlebar_light(self)
+
     def _init_central_workspace(self):
         self.workspace = QTabWidget()
         self.workspace.setTabsClosable(True)
@@ -85,7 +101,7 @@ class PyGSNMainWindow(QMainWindow):
             parent=self
         )
         self.hierarchy_dock.platform_activated.connect(self.open_platform_tab)
-        self.hierarchy_dock.chassis_clicked.connect(self.show_chassis_actions)
+        # Nota: Clic en chasis activa la plataforma directamente sin ventana modal emergente
         self.hierarchy_dock.center_origin_requested.connect(self.center_platform_origin)
         self.hierarchy_dock.center_centroid_requested.connect(self.center_platform_centroid)
         self.hierarchy_dock.add_sensor_requested.connect(self.show_add_sensor_dialog)
@@ -100,6 +116,8 @@ class PyGSNMainWindow(QMainWindow):
         self.console_dock.solve_requested.connect(self.action_solve_georef)
         self.console_dock.diagnostics_requested.connect(self.action_show_diagnostics)
         self.console_dock.residuals_requested.connect(self.action_show_residuals)
+        self.console_dock.chassis_modified.connect(self.on_project_changed)
+        self.console_dock.platform_created.connect(self.open_platform_tab)
         self.addDockWidget(Qt.RightDockWidgetArea, self.console_dock)
         self.console_dock.hide()
 
@@ -147,13 +165,15 @@ class PyGSNMainWindow(QMainWindow):
         menu_ana.addAction("Inspeccionar Residuales GNSS vs INS", self.action_show_residuals)
         menu_ana.addAction("Diagnóstico SVD y Auditoría de Matrices DCM", self.action_show_diagnostics)
 
-        # 5. Menú Visualización
-        menu_vis = mb.addMenu("&Visualización")
+        # 5. Menú Vista
+        menu_vis = mb.addMenu("Vista")
         menu_vis.addAction("Mostrar/Ocultar Panel de Capas", lambda: self.hierarchy_dock.setVisible(not self.hierarchy_dock.isVisible()))
         menu_vis.addAction("Mostrar/Ocultar Consola CLI", self.toggle_console)
         menu_vis.addSeparator()
         menu_vis.addAction("Centrar Vista al Origen [0, 0, 0]", lambda: self.center_platform_origin(self.project.active_platform_id))
         menu_vis.addAction("Centrar Vista al Centroide", lambda: self.center_platform_centroid(self.project.active_platform_id))
+        menu_vis.addSeparator()
+        menu_vis.addAction("Pantalla Completa", self.toggle_fullscreen, QKeySequence("F11"))
 
         # 6. Menú Ayuda
         menu_help = mb.addMenu("A&yuda")
@@ -166,7 +186,7 @@ class PyGSNMainWindow(QMainWindow):
 
         # SECCIÓN 1: PLATAFORMA
         lbl_plat = QLabel("Plataforma: ")
-        lbl_plat.setStyleSheet("color: #00b4d8; font-weight: bold;")
+        lbl_plat.setStyleSheet("color: #0077b6; font-weight: bold;")
         tb.addWidget(lbl_plat)
 
         btn_add_plat = QToolButton()
@@ -182,29 +202,45 @@ class PyGSNMainWindow(QMainWindow):
 
         self.tool_plat_move = QToolButton()
         self.tool_plat_move.setText("Mover")
+        self.tool_plat_move.setCheckable(True)
+        self.tool_plat_move.setChecked(True)
         self.tool_plat_move.setEnabled(False)
+        self.tool_plat_move.clicked.connect(lambda: self._select_platform_tool("Mover"))
         tb.addWidget(self.tool_plat_move)
+
+        self.tool_plat_draw = QToolButton()
+        self.tool_plat_draw.setText("Dibujar Chasis")
+        self.tool_plat_draw.setCheckable(True)
+        self.tool_plat_draw.setEnabled(False)
+        self.tool_plat_draw.clicked.connect(lambda: self._select_platform_tool("Dibujar"))
+        tb.addWidget(self.tool_plat_draw)
 
         self.tool_plat_rot = QToolButton()
         self.tool_plat_rot.setText("Rotar")
+        self.tool_plat_rot.setCheckable(True)
         self.tool_plat_rot.setEnabled(False)
+        self.tool_plat_rot.clicked.connect(lambda: self._select_platform_tool("Rotar"))
         tb.addWidget(self.tool_plat_rot)
 
         self.tool_plat_scale = QToolButton()
         self.tool_plat_scale.setText("Escalar")
+        self.tool_plat_scale.setCheckable(True)
         self.tool_plat_scale.setEnabled(False)
+        self.tool_plat_scale.clicked.connect(lambda: self._select_platform_tool("Escalar"))
         tb.addWidget(self.tool_plat_scale)
 
         self.tool_plat_verts = QToolButton()
         self.tool_plat_verts.setText("Vértices")
+        self.tool_plat_verts.setCheckable(True)
         self.tool_plat_verts.setEnabled(False)
+        self.tool_plat_verts.clicked.connect(lambda: self._select_platform_tool("Vértices"))
         tb.addWidget(self.tool_plat_verts)
 
         tb.addSeparator()
 
         # SECCIÓN 2: SENSORES
         lbl_sens = QLabel("Sensores: ")
-        lbl_sens.setStyleSheet("color: #ffd166; font-weight: bold;")
+        lbl_sens.setStyleSheet("color: #b45309; font-weight: bold;")
         tb.addWidget(lbl_sens)
 
         btn_add_sens = QToolButton()
@@ -230,6 +266,36 @@ class PyGSNMainWindow(QMainWindow):
 
         tb.addSeparator()
 
+        # SECCIÓN SNAPPING / AJUSTE A REJILLA (GENERAL PARA CHASIS Y SENSORES)
+        lbl_snap = QLabel("Ajuste: ")
+        lbl_snap.setStyleSheet("color: #0077b6; font-weight: bold;")
+        tb.addWidget(lbl_snap)
+
+        self.btn_snap = QToolButton()
+        self.btn_snap.setText("Snap Rejilla")
+        self.btn_snap.setCheckable(True)
+        self.btn_snap.setChecked(True)
+        self.btn_snap.toggled.connect(self._on_snap_setting_changed)
+        tb.addWidget(self.btn_snap)
+
+        self.spin_snap_val = QDoubleSpinBox()
+        self.spin_snap_val.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_snap_val.setRange(0.1, 1000.0)
+        self.spin_snap_val.setValue(5.0)  # 5 cm por defecto
+        self.spin_snap_val.setDecimals(1)
+        self.spin_snap_val.setFixedWidth(52)
+        self.spin_snap_val.valueChanged.connect(self._on_snap_setting_changed)
+        tb.addWidget(self.spin_snap_val)
+
+        self.combo_snap_unit = QComboBox()
+        self.combo_snap_unit.addItems(["cm", "m"])
+        self.combo_snap_unit.setCurrentText("cm")  # cm por defecto
+        self.combo_snap_unit.setFixedWidth(55)
+        self.combo_snap_unit.currentTextChanged.connect(self._on_snap_setting_changed)
+        tb.addWidget(self.combo_snap_unit)
+
+        tb.addSeparator()
+
         # SECCIÓN 3: CONSOLA CLI
         self.btn_toggle_cli = QToolButton()
         self.btn_toggle_cli.setText("Consola CLI")
@@ -240,14 +306,15 @@ class PyGSNMainWindow(QMainWindow):
     def _init_status_bar(self):
         sb = self.statusBar()
         self.lbl_status_state = QLabel("[Listo]")
-        self.lbl_status_state.setStyleSheet("color: #06d6a0; font-weight: bold;")
+        self.lbl_status_state.setStyleSheet("color: #059669; font-weight: bold;")
         sb.addWidget(self.lbl_status_state)
 
         self.lbl_status_proj = QLabel(f"Proyecto: {self.project.name}")
-        self.lbl_status_proj.setStyleSheet("color: #ffd166;")
+        self.lbl_status_proj.setStyleSheet("color: #0077b6; font-weight: 500;")
         sb.addPermanentWidget(self.lbl_status_proj)
 
         self.lbl_status_geo = QLabel("")
+        self.lbl_status_geo.setStyleSheet("color: #495057;")
         sb.addPermanentWidget(self.lbl_status_geo)
 
     def update_ui_state(self):
@@ -262,14 +329,51 @@ class PyGSNMainWindow(QMainWindow):
         )
         self.hierarchy_dock.rebuild_tree()
 
+    def _select_platform_tool(self, tool_name: str):
+        self.active_platform_tool = tool_name
+        tools = {
+            "Mover": self.tool_plat_move,
+            "Dibujar": self.tool_plat_draw,
+            "Rotar": self.tool_plat_rot,
+            "Escalar": self.tool_plat_scale,
+            "Vértices": self.tool_plat_verts
+        }
+        for name, btn in tools.items():
+            btn.setChecked(name == tool_name)
+        for widget in self.platform_canvases.values():
+            widget.set_active_tool(tool_name)
+        self.lbl_status_state.setText(f"[Herramienta Plataforma: {tool_name}]")
+
     def _on_toggle_platform_edit(self, checked: bool):
         self.platform_edit_mode = checked
         self.btn_plat_edit.setText("Editar [ON]" if checked else "Editar")
         self.tool_plat_move.setEnabled(checked)
+        self.tool_plat_draw.setEnabled(checked)
         self.tool_plat_rot.setEnabled(checked)
         self.tool_plat_scale.setEnabled(checked)
         self.tool_plat_verts.setEnabled(checked)
+        if checked:
+            self._select_platform_tool("Mover")
+        else:
+            self._select_platform_tool("Mover")
         self.lbl_status_state.setText("[Modo Edición Plataforma ACTIVO]" if checked else "[Listo]")
+
+    def get_snap_step_m(self) -> Optional[float]:
+        """Calcula el paso de ajuste en metros según el valor numérico y unidad seleccionada."""
+        if not hasattr(self, 'btn_snap') or not self.btn_snap.isChecked():
+            return None
+        val = self.spin_snap_val.value()
+        unit = self.combo_snap_unit.currentText()
+        return (val / 100.0) if unit == "cm" else val
+
+    def _on_snap_setting_changed(self):
+        step_m = self.get_snap_step_m()
+        for widget in self.platform_canvases.values():
+            widget.set_snap_step_m(step_m)
+        unit = self.combo_snap_unit.currentText()
+        val = self.spin_snap_val.value()
+        status_txt = f"{val:.1f} {unit}" if step_m is not None else "Desactivado"
+        self.lbl_status_state.setText(f"[Snap Rejilla: {status_txt}]")
 
     def _on_toggle_sensor_edit(self, checked: bool):
         self.sensor_edit_mode = checked
@@ -301,6 +405,9 @@ class PyGSNMainWindow(QMainWindow):
                 return
 
         widget = OrthoCADWidget(plat)
+        widget.set_active_tool(self.active_platform_tool)
+        widget.set_snap_step_m(self.get_snap_step_m())
+        widget.chassis_updated.connect(self.update_ui_state)
         self.platform_canvases[plat_id] = widget
         idx = self.workspace.addTab(widget, tab_title)
         self.workspace.setCurrentIndex(idx)
@@ -541,6 +648,13 @@ class PyGSNMainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "Aviso", "No hay informe calculado en la sesión.")
 
+    def toggle_fullscreen(self):
+        """Conmuta entre modo pantalla completa pura y ventana maximizada estándar."""
+        if self.isFullScreen():
+            self.showMaximized()
+        else:
+            self.showFullScreen()
+
     def action_about(self):
         QMessageBox.information(
             self, "Acerca de PyGSN",
@@ -554,10 +668,27 @@ class PyGSNApp:
     """Clase de inicialización y ejecución de la aplicación gráfica."""
 
     def __init__(self):
+        # Configurar identificador de proceso en Windows para que la barra de tareas
+        # muestre el icono del programa en lugar del genérico de python.exe
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("upv.pygsn.suite.v2")
+        except Exception:
+            pass
+
         self.app = QApplication(sys.argv)
+
+        # Establecer icono global de la suite
+        icons_dir = Path(__file__).resolve().parent.parent / "icons"
+        icon_path = icons_dir / "Logo.ico"
+        if not icon_path.exists():
+            icon_path = icons_dir / "Logo.svg"
+        if icon_path.exists():
+            self.app.setWindowIcon(QIcon(str(icon_path)))
+
         apply_pyside_theme(self.app)
         self.window = PyGSNMainWindow()
 
     def run(self):
-        self.window.show()
+        self.window.showMaximized()
         sys.exit(self.app.exec())

@@ -83,6 +83,7 @@ class Platform:
     length_m: float = 0.0                       # Dimension longitudinal X [m]
     width_m: float = 0.0                        # Dimension transversal Y [m]
     height_m: float = 0.0                       # Dimension vertical Z [m]
+    chassis_polygon: list[list[float]] | None = None # Polígono 2D opcional del chasis en b-frame [[x, y], ...]
     sensors: dict[str, Sensor] = field(default_factory=dict)
 
     def add_sensor(self, sensor: Sensor) -> None:
@@ -108,6 +109,7 @@ class Platform:
             "length_m": self.length_m,
             "width_m": self.width_m,
             "height_m": self.height_m,
+            "chassis_polygon": self.chassis_polygon,
             "sensors": {k: s.to_dict() for k, s in self.sensors.items()}
         }
 
@@ -123,6 +125,7 @@ class Platform:
             length_m=float(data.get("length_m", 0.0)),
             width_m=float(data.get("width_m", 0.0)),
             height_m=float(data.get("height_m", 0.0)),
+            chassis_polygon=data.get("chassis_polygon"),
         )
         for s_data in data.get("sensors", {}).values():
             plat.add_sensor(Sensor.from_dict(s_data))

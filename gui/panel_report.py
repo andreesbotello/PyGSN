@@ -27,7 +27,7 @@ class ReportViewerWidget(QWidget):
 
         bar_layout = QHBoxLayout()
         lbl = QLabel("Informe Técnico Paso a Paso (Auditoría SVD, Geodesia y Residuales)")
-        lbl.setStyleSheet("color: #00b4d8; font-weight: bold;")
+        lbl.setStyleSheet("color: #0077b6; font-weight: bold;")
         bar_layout.addWidget(lbl)
         bar_layout.addStretch()
 
@@ -44,7 +44,7 @@ class ReportViewerWidget(QWidget):
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
         self.text_edit.setStyleSheet(
-            "background-color: #121418; color: #e6ebf5; font-family: 'Consolas', 'Courier New', monospace; font-size: 11px; border: 1px solid #2d313d;"
+            "background-color: #ffffff; color: #1e293b; font-family: 'Consolas', 'Courier New', monospace; font-size: 11px; border: 1px solid #ced4da;"
         )
         layout.addWidget(self.text_edit)
 
