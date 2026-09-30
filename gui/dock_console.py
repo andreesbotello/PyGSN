@@ -7,6 +7,7 @@ Terminal interactiva CLI integrada en un dock desacoplable:
 """
 
 import re
+import numpy as np
 from typing import Callable, Optional, List, Any
 from PySide6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit,
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QTextCursor
 
-from core.models import Platform
+from core.models import Platform, Sensor, SensorType, PlatformType
 from core.project import Project
 
 
@@ -26,6 +27,7 @@ class ConsoleDock(QDockWidget):
     diagnostics_requested = Signal()
     residuals_requested = Signal()
     chassis_modified = Signal()
+    sensor_modified = Signal()
     platform_created = Signal(str)
 
     def __init__(
@@ -98,21 +100,30 @@ class ConsoleDock(QDockWidget):
 
         if root_cmd in ("help", "?"):
             self.print_line("Comandos disponibles en PyGSN CLI:")
-            self.print_line("  help                           : Muestra esta ayuda")
-            self.print_line("  status                         : Estado del proyecto, plataforma y geodesia")
-            self.print_line("  platforms                      : Lista las plataformas del proyecto")
-            self.print_line("  platform add <id> [nombre]     : Crea y activa una plataforma en el workspace")
-            self.print_line("  platform select <id>           : Activa una plataforma existente")
-            self.print_line("  chassis                        : Consulta el chasis de la plataforma activa")
-            self.print_line("  chassis box <L> <W> <H>        : Define caja envolvente 3D (Largo, Ancho, Alto en m)")
-            self.print_line("  chassis poly [S|F|L] (p1) (p2) : Define polígono 2D por vértices (ej: poly S (2,-1) (2,1) (-2,1) (-2,-1))")
-            self.print_line("  chassis pts (x,y,z) ...        : Define vértices 3D con proyección automática a S, F, L")
-            self.print_line("  chassis clear                  : Elimina el chasis (modo chasis libre)")
-            self.print_line("  sensors                        : Lista los sensores de la plataforma activa")
-            self.print_line("  solve                          : Ejecuta el solver SVD de georreferenciación")
-            self.print_line("  residuals                      : Inspecciona los residuales del cálculo")
-            self.print_line("  diag                           : Auditoría espectral y diagnóstico DCM")
-            self.print_line("  clear                          : Limpia la pantalla de la terminal\n")
+            self.print_line("  help                                    : Muestra esta ayuda")
+            self.print_line("  status                                  : Estado del proyecto, plataforma y geodesia")
+            self.print_line("  platforms                               : Lista las plataformas del proyecto")
+            self.print_line("  platform add <id> [nom] [tipo] [fija]   : Crea y activa una plataforma en el workspace")
+            self.print_line("  platform select <id>                    : Activa una plataforma existente")
+            self.print_line("  chassis                                 : Consulta el chasis de la plataforma activa")
+            self.print_line("  chassis box <L> <W> <H>                 : Define caja envolvente 3D (Largo, Ancho, Alto en m)")
+            self.print_line("  chassis poly [S|F|L] (p1) (p2) ...      : Define polígono 2D por vértices")
+            self.print_line("  chassis pts (x,y,z) ...                 : Define vértices 3D con proyección a 3 vistas")
+            self.print_line("  chassis move <dx> <dy> [dz]             : Traslada el chasis métricamente")
+            self.print_line("  chassis center                          : Centra la geometría del chasis en PLA [0, 0, 0]")
+            self.print_line("  chassis rotate <deg> [S|F|L]            : Rota el chasis en el plano ortogonal")
+            self.print_line("  chassis scale <fx> <fy> [fz]            : Escala las dimensiones del chasis")
+            self.print_line("  chassis clear                           : Elimina el chasis (modo chasis libre)")
+            self.print_line("  sensors                                 : Lista los sensores de la plataforma activa")
+            self.print_line("  sensor add <code> <tipo> [x] [y] [z]    : Añade un sensor a la plataforma activa")
+            self.print_line("  sensor place <code> <x> <y> [z]         : Posiciona lever-arm de un sensor")
+            self.print_line("  sensor move <code> <dx> <dy> [dz]       : Traslada lever-arm de un sensor")
+            self.print_line("  sensor rotate <code> <dr> <dp> <dy>     : Rota boresight (roll, pitch, yaw deg)")
+            self.print_line("  sensor remove <code>                    : Elimina un sensor de la plataforma")
+            self.print_line("  solve                                   : Ejecuta el solver SVD de georreferenciación")
+            self.print_line("  residuals                               : Inspecciona los residuales del cálculo")
+            self.print_line("  diag                                    : Auditoría espectral y diagnóstico DCM")
+            self.print_line("  clear                                   : Limpia la pantalla de la terminal\n")
 
         elif root_cmd == "status":
             proj = self.get_project()
@@ -141,20 +152,8 @@ class ConsoleDock(QDockWidget):
         elif root_cmd == "chassis":
             self._handle_chassis_command(cmd, parts[1:])
 
-        elif root_cmd == "sensors":
-            proj = self.get_project()
-            plat = proj.platform
-            if not plat:
-                self.print_line("No hay plataforma activa seleccionada.\n")
-                return
-            if not plat.sensors:
-                self.print_line(f"La plataforma '{plat.name}' no tiene sensores montados.\n")
-                return
-            self.print_line(f"Sensores en '{plat.name}':")
-            for c, s in plat.sensors.items():
-                arm = s.lever_arm_b
-                self.print_line(f"  {c:<6s} [{s.sensor_type.value:<4s}] arm=[{arm[0]:+.3f}, {arm[1]:+.3f}, {arm[2]:+.3f}]m  {s.name}")
-            self.print_line("")
+        elif root_cmd in ("sensors", "sensor", "sens"):
+            self._handle_sensor_command(cmd, parts[1:])
 
         elif root_cmd == "solve":
             self.print_line("Ejecutando resolución de georreferenciación SVD...")
@@ -183,17 +182,21 @@ class ConsoleDock(QDockWidget):
         sub = args[0].lower()
         if sub in ("add", "create", "new"):
             if len(args) < 2:
-                self.print_line("Error: Debe indicar al menos el identificador (ej: platform add V1 'Vehiculo 1').\n")
+                self.print_line("Error: Debe indicar al menos el identificador (ej: platform add V1 'Vehiculo 1' VEHICLE fija).\n")
                 return
             pid = args[1].upper()
             pname = args[2] if len(args) >= 3 else pid
-            ptype = args[3].upper() if len(args) >= 4 else "VEHICLE"
+            ptype = args[3].upper() if len(args) >= 4 else "GENERIC"
+            is_fixed = False
+            if len(args) >= 5:
+                is_fixed = args[4].lower() in ("true", "1", "fixed", "fija", "si", "yes")
+
             if pid in proj.platforms:
                 self.print_line(f"Aviso: La plataforma '{pid}' ya existe. Seleccionándola como activa.")
             else:
-                plat = Platform(id=pid, name=pname, platform_type=ptype)
+                plat = Platform(id=pid, name=pname, platform_type=ptype, is_fixed=is_fixed)
                 proj.add_platform(plat)
-                self.print_line(f"[OK] Plataforma creada: [{pid}] {pname} ({ptype})")
+                self.print_line(f"[OK] Plataforma creada: [{pid}] {pname} ({ptype}, fija={is_fixed})")
             proj.set_active_platform(pid)
             self.platform_created.emit(pid)
             self.print_line(f"[OK] Plataforma '{pid}' activada en el Workspace CAD.\n")
@@ -356,7 +359,208 @@ class ConsoleDock(QDockWidget):
             self.print_line("     Proyectado a las vistas Superior, Frontal y Lateral.\n")
             return
 
+        # 5. Mover chasis: chassis move <dx> <dy> [dz]
+        if sub in ("move", "mover", "trasladar", "desplazar"):
+            if len(args) < 3:
+                self.print_line("Error: Indique al menos dx y dy (ej: chassis move 0.5 -0.2 [dz]).\n")
+                return
+            try:
+                dx = float(args[1])
+                dy = float(args[2])
+                dz = float(args[3]) if len(args) > 3 else 0.0
+                plat.translate(dx, dy, dz)
+                self.chassis_modified.emit()
+                c = plat.chassis_center_b
+                self.print_line(f"[OK] Chasis desplazado: dx={dx:+.3f}m, dy={dy:+.3f}m, dz={dz:+.3f}m.")
+                self.print_line(f"     Nuevo centroide PLA: [{c[0]:.3f}, {c[1]:.3f}, {c[2]:.3f}]m.\n")
+            except ValueError:
+                self.print_line("Error: Los valores de desplazamiento deben ser numéricos.\n")
+            return
+
+        # 6. Centrar chasis al origen PLA: chassis center
+        if sub in ("center", "centrar", "origin", "origen"):
+            dx, dy, dz = plat.center_to_origin()
+            self.chassis_modified.emit()
+            self.print_line(f"[OK] Geometría del chasis centrada en el origen PLA [0, 0, 0] (traslación: [{dx:+.3f}, {dy:+.3f}, {dz:+.3f}]m).\n")
+            return
+
+        # 7. Rotar chasis en plano ortogonal: chassis rotate <deg> [S|F|L]
+        if sub in ("rotate", "rotar", "rot"):
+            if len(args) < 2:
+                self.print_line("Error: Indique el ángulo en grados (ej: chassis rotate 45 [S|F|L]).\n")
+                return
+            try:
+                ang = float(args[1])
+                plane = args[2].upper() if len(args) > 2 else "S"
+                if plane not in ("S", "F", "L"):
+                    plane = "S"
+                plat.rotate_plane(ang, plane)
+                self.chassis_modified.emit()
+                self.print_line(f"[OK] Chasis rotado {ang:+.2f}° en plano {plane}.")
+                self.print_line(f"     Nuevas dimensiones: Largo={plat.length_m:.3f}m, Ancho={plat.width_m:.3f}m.\n")
+            except ValueError:
+                self.print_line("Error: El ángulo debe ser un valor numérico en grados.\n")
+            return
+
+        # 8. Escalar dimensiones de chasis: chassis scale <fx> <fy> [fz]
+        if sub in ("scale", "escalar"):
+            if len(args) < 3:
+                self.print_line("Error: Indique factores fx y fy (y opcional fz). Ej: chassis scale 1.2 1.2 [1.0]\n")
+                return
+            try:
+                fx = float(args[1])
+                fy = float(args[2])
+                fz = float(args[3]) if len(args) > 3 else 1.0
+                plat.scale_dimensions(fx, fy, fz)
+                self.chassis_modified.emit()
+                self.print_line(f"[OK] Chasis escalado ({fx:.2f}x, {fy:.2f}x, {fz:.2f}x).")
+                self.print_line(f"     Nuevas cotas: Largo={plat.length_m:.3f}m, Ancho={plat.width_m:.3f}m, Alto={plat.height_m:.3f}m.\n")
+            except ValueError:
+                self.print_line("Error: Los factores de escala deben ser numéricos.\n")
+            return
+
         self.print_line(f"Subcomando de chasis desconocido: '{sub}'. Escriba 'help' o 'chassis' sin argumentos.\n")
+
+    def _handle_sensor_command(self, full_cmd: str, args: List[str]):
+        proj = self.get_project()
+        plat = proj.platform
+        if not plat:
+            self.print_line("Error: No hay plataforma activa. Active una con 'platform select <id>'.\n")
+            return
+
+        if not args or args[0].lower() in ("list", "ls"):
+            if not plat.sensors:
+                self.print_line(f"La plataforma '{plat.name}' no tiene sensores montados.\n")
+                return
+            self.print_line(f"Sensores en '{plat.name}':")
+            for c, s in plat.sensors.items():
+                arm = s.lever_arm_b
+                b_deg = s.boresight_deg
+                self.print_line(f"  {c:<6s} [{s.sensor_type.value:<6s}] arm=[{arm[0]:+.3f}, {arm[1]:+.3f}, {arm[2]:+.3f}]m  boresight=({b_deg[0]:.1f}, {b_deg[1]:.1f}, {b_deg[2]:.1f})°  {s.name}")
+            self.print_line("")
+            return
+
+        sub = args[0].lower()
+
+        # 1. sensor add <code> <tipo> [x] [y] [z] [r] [p] [y] [nombre]
+        if sub in ("add", "crear", "new"):
+            if len(args) < 3:
+                self.print_line("Uso: sensor add <code> <tipo> [x] [y] [z] [roll] [pitch] [yaw] [nombre]")
+                self.print_line("Tipos válidos: GNSS, INS, CAMERA, LIDAR, ODOMETER, OTHER\n")
+                return
+            code = args[1].upper()
+            stype_str = args[2].upper()
+            try:
+                stype = SensorType(stype_str)
+            except ValueError:
+                stype = SensorType.OTHER
+                for t in SensorType:
+                    if stype_str in t.value or t.value in stype_str:
+                        stype = t
+                        break
+
+            x = float(args[3]) if len(args) > 3 and self._is_float(args[3]) else 0.0
+            y = float(args[4]) if len(args) > 4 and self._is_float(args[4]) else 0.0
+            z = float(args[5]) if len(args) > 5 and self._is_float(args[5]) else 0.0
+
+            r = float(args[6]) if len(args) > 6 and self._is_float(args[6]) else 0.0
+            p = float(args[7]) if len(args) > 7 and self._is_float(args[7]) else 0.0
+            yaw = float(args[8]) if len(args) > 8 and self._is_float(args[8]) else 0.0
+
+            name = " ".join(args[9:]) if len(args) > 9 else f"Sensor {code}"
+
+            sens = Sensor(
+                code=code,
+                name=name,
+                sensor_type=stype,
+                lever_arm_b=np.array([x, y, z], dtype=np.float64),
+                boresight_deg=(r, p, yaw)
+            )
+            plat.add_sensor(sens)
+            self.sensor_modified.emit()
+            self.print_line(f"[OK] Sensor {code} [{stype.value}] añadido a '{plat.name}':")
+            self.print_line(f"     lever_arm=[{x:+.3f}, {y:+.3f}, {z:+.3f}]m | boresight=({r:.1f}, {p:.1f}, {yaw:.1f})°\n")
+            return
+
+        # 2. sensor place <code> <x> <y> [z]
+        if sub in ("place", "ubicar", "set"):
+            if len(args) < 4:
+                self.print_line("Uso: sensor place <code> <x> <y> [z]\n")
+                return
+            code = args[1].upper()
+            if code not in plat.sensors:
+                self.print_line(f"Error: Sensor '{code}' no encontrado en la plataforma activa '{plat.name}'.\n")
+                return
+            try:
+                x = float(args[2])
+                y = float(args[3])
+                z = float(args[4]) if len(args) > 4 else float(plat.sensors[code].lever_arm_b[2])
+                plat.sensors[code].lever_arm_b = np.array([x, y, z], dtype=np.float64)
+                self.sensor_modified.emit()
+                self.print_line(f"[OK] Lever-arm de sensor {code} posicionado en [{x:.3f}, {y:.3f}, {z:.3f}]m.\n")
+            except ValueError:
+                self.print_line("Error: Coordenadas métricas no válidas.\n")
+            return
+
+        # 3. sensor move <code> <dx> <dy> [dz]
+        if sub in ("move", "mover"):
+            if len(args) < 4:
+                self.print_line("Uso: sensor move <code> <dx> <dy> [dz]\n")
+                return
+            code = args[1].upper()
+            if code not in plat.sensors:
+                self.print_line(f"Error: Sensor '{code}' no encontrado en la plataforma activa '{plat.name}'.\n")
+                return
+            try:
+                dx = float(args[2])
+                dy = float(args[3])
+                dz = float(args[4]) if len(args) > 4 else 0.0
+                plat.sensors[code].lever_arm_b += np.array([dx, dy, dz], dtype=np.float64)
+                arm = plat.sensors[code].lever_arm_b
+                self.sensor_modified.emit()
+                self.print_line(f"[OK] Lever-arm de {code} desplazado por [dx={dx:+.3f}, dy={dy:+.3f}, dz={dz:+.3f}]m.")
+                self.print_line(f"     Nueva posición: [{arm[0]:.3f}, {arm[1]:.3f}, {arm[2]:.3f}]m.\n")
+            except ValueError:
+                self.print_line("Error: Los desplazamientos deben ser valores numéricos.\n")
+            return
+
+        # 4. sensor rotate <code> <droll> <dpitch> <dyaw>
+        if sub in ("rot", "rotate", "rotar"):
+            if len(args) < 5:
+                self.print_line("Uso: sensor rotate <code> <droll> <dpitch> <dyaw>\n")
+                return
+            code = args[1].upper()
+            if code not in plat.sensors:
+                self.print_line(f"Error: Sensor '{code}' no encontrado en la plataforma activa '{plat.name}'.\n")
+                return
+            try:
+                dr = float(args[2])
+                dp = float(args[3])
+                dy = float(args[4])
+                r, p, y = plat.sensors[code].boresight_deg
+                plat.sensors[code].boresight_deg = (round(r + dr, 3), round(p + dp, 3), round(y + dy, 3))
+                nb = plat.sensors[code].boresight_deg
+                self.sensor_modified.emit()
+                self.print_line(f"[OK] Boresight de sensor {code} rotado por (dr={dr:+.2f}°, dp={dp:+.2f}°, dy={dy:+.2f}°).")
+                self.print_line(f"     Nueva orientación: Roll={nb[0]:.2f}°, Pitch={nb[1]:.2f}°, Yaw={nb[2]:.2f}°.\n")
+            except ValueError:
+                self.print_line("Error: Los ángulos deben ser valores numéricos en grados.\n")
+            return
+
+        # 5. sensor remove <code>
+        if sub in ("remove", "rm", "del", "delete", "eliminar"):
+            if len(args) < 2:
+                self.print_line("Uso: sensor remove <code>\n")
+                return
+            code = args[1].upper()
+            if plat.remove_sensor(code):
+                self.sensor_modified.emit()
+                self.print_line(f"[OK] Sensor {code} eliminado de la plataforma '{plat.name}'.\n")
+            else:
+                self.print_line(f"Error: Sensor '{code}' no existe en '{plat.name}'.\n")
+            return
+
+        self.print_line(f"Subcomando de sensor desconocido: 'sensor {sub}'. Escriba 'help'.\n")
 
     @staticmethod
     def _is_float(s: str) -> bool:

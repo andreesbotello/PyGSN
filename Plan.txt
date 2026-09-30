@@ -210,3 +210,6 @@ Para garantizar estabilidad matemática, código limpio y evitar sobrecargar la 
 - Conexión de menús y herramientas con `GeoreferencingOperator` y `TrajectoryKinematicsOperator`.
 - Barra de estado inferior en tiempo real (estado del cálculo, proyecto, elipsoide, huso UTM, ondulación N).
 - Validación continua con la suite de pruebas unitarias (`python main.py --test`), 8 tests pasando en 0.18s.
+
+X. Los estados de comprobación fallan descommunalmente. trataré de detallar los errores para facilitar la correción. 
+Error1. Flujo, creo una nueva plataforma, queda con chasis vacio. le doy a editar y lo que está bien es que pasa a dibujar chasis, porque esta inactivo Mover, Rotar, Escalar. pero bueno, dibujo el chasis, le doy click a Editar y me pregunta si deseo guardar o descartar, le doy guardar y aqui viene el error. permanece activo el Dibujar Chasis. a pesar de dar guardar. como si al darle guardar no desactiva la opción de edición. 

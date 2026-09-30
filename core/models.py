@@ -42,8 +42,8 @@ class Sensor:
             "code": self.code,
             "name": self.name,
             "sensor_type": self.sensor_type.value,
-            "lever_arm_b": self.lever_arm_b.tolist(),
-            "boresight_deg": list(self.boresight_deg),
+            "lever_arm_b": [float(x) for x in self.lever_arm_b],
+            "boresight_deg": [float(x) for x in self.boresight_deg],
             "geodetic_obs": [float(x) for x in self.geodetic_obs] if self.geodetic_obs else None,
             "attitude_obs_deg": list(self.attitude_obs_deg) if self.attitude_obs_deg else None,
         }
@@ -84,7 +84,12 @@ class Platform:
     width_m: float = 0.0                        # Dimension transversal Y [m]
     height_m: float = 0.0                       # Dimension vertical Z [m]
     chassis_polygon: list[list[float]] | None = None # Polígono 2D opcional del chasis en b-frame [[x, y], ...]
+    chassis_center_b: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0]) # Centroide/offset 3D del chasis [xb, yb, zb]
     sensors: dict[str, Sensor] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if (self.length_m > 0 or self.width_m > 0 or self.height_m > 0 or self.chassis_polygon) and not self.has_dimensions:
+            self.has_dimensions = True
 
     def add_sensor(self, sensor: Sensor) -> None:
         self.sensors[sensor.code] = sensor
@@ -110,6 +115,7 @@ class Platform:
             "width_m": self.width_m,
             "height_m": self.height_m,
             "chassis_polygon": self.chassis_polygon,
+            "chassis_center_b": list(self.chassis_center_b),
             "sensors": {k: s.to_dict() for k, s in self.sensors.items()}
         }
 
@@ -126,10 +132,121 @@ class Platform:
             width_m=float(data.get("width_m", 0.0)),
             height_m=float(data.get("height_m", 0.0)),
             chassis_polygon=data.get("chassis_polygon"),
+            chassis_center_b=list(data.get("chassis_center_b", [0.0, 0.0, 0.0])),
         )
         for s_data in data.get("sensors", {}).values():
             plat.add_sensor(Sensor.from_dict(s_data))
         return plat
+
+    def ensure_polygon(self) -> None:
+        """Garantiza la existencia de vértices poligonales a partir de la caja envolvente si no existen."""
+        if not self.chassis_polygon and (self.has_dimensions or (self.length_m > 0 and self.width_m > 0)):
+            if self.length_m > 0 and self.width_m > 0:
+                self.has_dimensions = True
+                hl = self.length_m / 2.0
+                hw = self.width_m / 2.0
+                cx, cy, _ = self.chassis_center_b
+                self.chassis_polygon = [
+                    [round(cx + hl, 4), round(cy - hw, 4)],
+                    [round(cx + hl, 4), round(cy + hw, 4)],
+                    [round(cx - hl, 4), round(cy + hw, 4)],
+                    [round(cx - hl, 4), round(cy - hw, 4)]
+                ]
+
+    def get_bounding_box(self) -> dict[str, float]:
+        """Devuelve los límites métricos envolventes (x_min, x_max, y_min, y_max, z_min, z_max)."""
+        self.ensure_polygon()
+        if self.chassis_polygon:
+            pts = np.array(self.chassis_polygon, dtype=np.float64)
+            x_min, x_max = float(np.min(pts[:, 0])), float(np.max(pts[:, 0]))
+            y_min, y_max = float(np.min(pts[:, 1])), float(np.max(pts[:, 1]))
+        else:
+            hl = self.length_m / 2.0
+            hw = self.width_m / 2.0
+            cx, cy, _ = self.chassis_center_b
+            x_min, x_max = cx - hl, cx + hl
+            y_min, y_max = cy - hw, cy + hw
+        hz = self.height_m / 2.0
+        cz = self.chassis_center_b[2]
+        return {
+            "x_min": round(x_min, 4),
+            "x_max": round(x_max, 4),
+            "y_min": round(y_min, 4),
+            "y_max": round(y_max, 4),
+            "z_min": round(cz - hz, 4),
+            "z_max": round(cz + hz, 4),
+        }
+
+    def translate(self, dx: float, dy: float, dz: float = 0.0) -> None:
+        """Traslada el chasis (vértices del polígono y centroide 3D) por un delta métrico."""
+        self.ensure_polygon()
+        if self.chassis_polygon:
+            for pt in self.chassis_polygon:
+                pt[0] = round(pt[0] + dx, 4)
+                pt[1] = round(pt[1] + dy, 4)
+            pts = np.array(self.chassis_polygon)
+            self.length_m = round(float(np.max(pts[:, 0]) - np.min(pts[:, 0])), 4)
+            self.width_m = round(float(np.max(pts[:, 1]) - np.min(pts[:, 1])), 4)
+        self.chassis_center_b[0] = round(self.chassis_center_b[0] + dx, 4)
+        self.chassis_center_b[1] = round(self.chassis_center_b[1] + dy, 4)
+        self.chassis_center_b[2] = round(self.chassis_center_b[2] + dz, 4)
+
+    def center_to_origin(self) -> tuple[float, float, float]:
+        """Centra la geometría del chasis en el origen (0, 0, 0) de b-frame."""
+        bounds = self.get_bounding_box()
+        cx = (bounds["x_min"] + bounds["x_max"]) / 2.0
+        cy = (bounds["y_min"] + bounds["y_max"]) / 2.0
+        cz = (bounds["z_min"] + bounds["z_max"]) / 2.0
+        self.translate(-cx, -cy, -cz)
+        self.chassis_center_b = [0.0, 0.0, 0.0]
+        return (-cx, -cy, -cz)
+
+    def rotate_plane(self, angle_deg: float, plane: str = "S") -> None:
+        """
+        Rota el chasis en el plano ortogonal 2D activo.
+        - En plano S: rotación alrededor de Zb (Yaw) afectando a Xb e Yb (dZb = 0).
+        """
+        self.ensure_polygon()
+        if not self.chassis_polygon:
+            return
+
+        rad = np.radians(angle_deg)
+        cos_a = np.cos(rad)
+        sin_a = np.sin(rad)
+
+        pts = np.array(self.chassis_polygon, dtype=np.float64)
+        centroid = np.mean(pts, axis=0)
+        rel = pts - centroid
+
+        rot_mat = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+        rotated_rel = rel @ rot_mat.T
+        rotated_pts = rotated_rel + centroid
+
+        self.chassis_polygon = [[round(float(p[0]), 4), round(float(p[1]), 4)] for p in rotated_pts]
+        pts_new = np.array(self.chassis_polygon)
+        self.length_m = round(float(np.max(pts_new[:, 0]) - np.min(pts_new[:, 0])), 4)
+        self.width_m = round(float(np.max(pts_new[:, 1]) - np.min(pts_new[:, 1])), 4)
+
+    def scale_dimensions(self, factor_l: float, factor_w: float, factor_h: float = 1.0) -> None:
+        """Escala las dimensiones y el polígono del chasis respecto a su centroide."""
+        if not self.has_dimensions:
+            return
+        self.ensure_polygon()
+        if self.chassis_polygon:
+            pts = np.array(self.chassis_polygon, dtype=np.float64)
+            centroid = np.mean(pts, axis=0)
+            rel = pts - centroid
+            rel[:, 0] *= factor_l
+            rel[:, 1] *= factor_w
+            scaled_pts = rel + centroid
+            self.chassis_polygon = [[round(float(p[0]), 4), round(float(p[1]), 4)] for p in scaled_pts]
+            pts_new = np.array(self.chassis_polygon)
+            self.length_m = round(float(np.max(pts_new[:, 0]) - np.min(pts_new[:, 0])), 4)
+            self.width_m = round(float(np.max(pts_new[:, 1]) - np.min(pts_new[:, 1])), 4)
+        else:
+            self.length_m = round(self.length_m * factor_l, 4)
+            self.width_m = round(self.width_m * factor_w, 4)
+        self.height_m = round(self.height_m * factor_h, 4)
 
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent)

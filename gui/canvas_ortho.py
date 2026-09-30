@@ -47,6 +47,8 @@ class OrthoCADCanvas(QWidget):
 
     scale_changed = Signal(float)
     chassis_dimensions_changed = Signal(float, float, float) # length, width, height
+    sensor_placed = Signal(str, float, float, float) # code, x, y, z
+    sensor_moved = Signal(str, float, float, float)
 
     # Pasos de cuadrícula dinámicos disponibles en metros
     GRID_STEPS_M: List[float] = [0.001, 0.005, 0.010, 0.050, 0.100, 0.500, 1.000, 5.000]
@@ -62,10 +64,20 @@ class OrthoCADCanvas(QWidget):
         self.allow_pan: bool = True  # Bloqueado en 4Q para mantener alineación ortogonal
 
         # Herramientas y Snapping
-        self.active_tool: str = "Mover" # Modo por defecto
+        self.is_editing: bool = False # Flag estricto de sesión de edición activa
+        self.active_tool: str = "Navegar" # Modo por defecto
         self.snap_step_m: Optional[float] = 0.05 # 5 cm por defecto
+        self.editing_sensor_code: Optional[str] = None # Sensor activo en edición si aplica
 
         self._dragging: bool = False
+        self._moving_chassis: bool = False
+        self._moving_sensor: bool = False
+        self._chassis_moved: bool = False
+        self._dragging_vertex_idx: Optional[int] = None
+        self._hovered_vertex_idx: Optional[int] = None
+        self._vertex_moved: bool = False
+        self._drag_start_bounds: Optional[Dict[str, float]] = None
+        self._drag_start_polygon: Optional[List[List[float]]] = None
         self._last_mouse_pos = QPointF(0, 0)
         self._mouse_press_pos = QPointF(0, 0)
 
@@ -75,22 +87,96 @@ class OrthoCADCanvas(QWidget):
         self._box_start_pos: Optional[QPointF] = None
         self._box_preview_dims: Optional[Tuple[float, float, float]] = None
 
+        self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_context_menu)
+
+    def keyPressEvent(self, event):
+        """Gestiona navegación por flechas de teclado y borrado de último vértice con Backspace."""
+        key = event.key()
+
+        # 1. Borrado de último vértice dibujado con Backspace o Delete
+        if key in (Qt.Key_Backspace, Qt.Key_Delete):
+            if self.active_tool == "Dibujar" and len(self._polygon_vertices) > 0:
+                self._polygon_vertices.pop()
+                self.update()
+                event.accept()
+                return
+
+        # 2. Desplazamiento del workspace mediante las flechas del teclado
+        step_base_m = self.snap_step_m if (self.snap_step_m and self.snap_step_m > 0) else 0.05
+        mult = 5.0 if (event.modifiers() & Qt.ShiftModifier) else 1.0
+        delta_px = step_base_m * mult * self.scale
+
+        if key == Qt.Key_Up:
+            self.pan_y += delta_px
+            self.update()
+            event.accept()
+            return
+        elif key == Qt.Key_Down:
+            self.pan_y -= delta_px
+            self.update()
+            event.accept()
+            return
+        elif key == Qt.Key_Left:
+            self.pan_x += delta_px
+            self.update()
+            event.accept()
+            return
+        elif key == Qt.Key_Right:
+            self.pan_x -= delta_px
+            self.update()
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
 
     def set_tool(self, tool_name: str):
         """Actualiza la herramienta activa y el cursor del lienzo."""
         self.active_tool = tool_name
         self._polygon_vertices.clear()
         self._box_preview_dims = None
-        if tool_name == "Mover":
-            self.setCursor(Qt.OpenHandCursor if self.allow_pan else Qt.ArrowCursor)
-        elif tool_name == "Dibujar":
+        self._dragging_vertex_idx = None
+        self._hovered_vertex_idx = None
+        self._vertex_moved = False
+        self._drag_start_bounds = None
+        self._drag_start_polygon = None
+        if self.is_editing and tool_name == "Mover":
+            self.setCursor(Qt.OpenHandCursor)
+        elif self.is_editing and tool_name == "Dibujar":
             self.setCursor(Qt.CrossCursor)
-        else:
+        elif self.is_editing and tool_name == "Vértices":
             self.setCursor(Qt.ArrowCursor)
+        else:
+            self.setCursor(Qt.OpenHandCursor if self.allow_pan else Qt.ArrowCursor)
+        self.update()
+
+    def set_editing_mode(self, enabled: bool):
+        """Activa o desactiva las capacidades de edición interactiva."""
+        self.is_editing = enabled
+        self._moving_chassis = False
+        self._dragging = False
+        self._polygon_vertices.clear()
+        self._box_start_pos = None
+        self._box_preview_dims = None
+        self._dragging_vertex_idx = None
+        self._hovered_vertex_idx = None
+        self._vertex_moved = False
+        if not enabled:
+            self.active_tool = "Navegar"
+            self.editing_sensor_code = None
+            self.setCursor(Qt.OpenHandCursor if self.allow_pan else Qt.ArrowCursor)
+        else:
+            if self.active_tool == "Mover":
+                self.setCursor(Qt.OpenHandCursor)
+            elif self.active_tool == "Dibujar":
+                self.setCursor(Qt.CrossCursor)
+            elif self.active_tool == "Vértices":
+                self.setCursor(Qt.ArrowCursor)
+            else:
+                self.setCursor(Qt.OpenHandCursor if self.allow_pan else Qt.ArrowCursor)
         self.update()
 
     def set_snap_step(self, step_m: Optional[float]):
@@ -136,7 +222,6 @@ class OrthoCADCanvas(QWidget):
         factor = 1.15 if delta > 0 else 0.85
 
         # Límite superior: la altura visible del lienzo no puede exceder 5.0 metros
-        # viewport_height_m = h / scale <= 5.0 m ==> min_scale = h / 5.0
         h_viewport = max(50.0, float(self.height()))
         min_scale = h_viewport / 5.0
         max_scale = 10000.0
@@ -188,34 +273,123 @@ class OrthoCADCanvas(QWidget):
     def mousePressEvent(self, event: QMouseEvent):
         self._mouse_press_pos = event.position()
         if event.button() == Qt.LeftButton:
-            if self.active_tool == "Mover":
-                if self.allow_pan:
-                    self._dragging = True
-                    self._last_mouse_pos = event.position()
-                    self.setCursor(Qt.ClosedHandCursor)
-                event.accept()
-                return
-            elif self.active_tool == "Dibujar":
-                self._box_start_pos = event.position()
-                w, h = float(self.width()), float(self.height())
-                cx = w / 2.0 + self.pan_x
-                cy = h / 2.0 + self.pan_y
-                u_raw, v_raw = self._screen_to_body_2d(event.position(), cx, cy)
-                u_snap = self._snap_coord(u_raw)
-                v_snap = self._snap_coord(v_raw)
+            # Si estamos en modo edición y la vista permite interacción activa (no 4Q)
+            if self.is_editing and self.allow_pan:
+                if self.active_tool == "Mover":
+                    # Si estamos editando un sensor, verificar si hace clic cerca del sensor para arrastrarlo
+                    if self.editing_sensor_code and self.platform and self.editing_sensor_code in self.platform.sensors:
+                        sens = self.platform.sensors[self.editing_sensor_code]
+                        w, h = float(self.width()), float(self.height())
+                        cx = w / 2.0 + self.pan_x
+                        cy = h / 2.0 + self.pan_y
+                        bx, by, bz = sens.lever_arm_b[0], sens.lever_arm_b[1], sens.lever_arm_b[2]
+                        if self.view_type == "S":
+                            scr_pos = QPointF(cx + by * self.scale, cy - bx * self.scale)
+                        elif self.view_type == "F":
+                            scr_pos = QPointF(cx + by * self.scale, cy + bz * self.scale)
+                        else:  # L
+                            scr_pos = QPointF(cx + bx * self.scale, cy + bz * self.scale)
+                        if np.hypot(event.position().x() - scr_pos.x(), event.position().y() - scr_pos.y()) <= 16.0:
+                            self._moving_sensor = True
+                            self._last_mouse_pos = event.position()
+                            self.setCursor(Qt.ClosedHandCursor)
+                            event.accept()
+                            return
 
-                # Si hace clic cerca del primer vértice (distancia < 15px en pantalla) y hay >= 3 vértices: cerrar polígono
-                if len(self._polygon_vertices) >= 3:
-                    first_pt = self._polygon_vertices[0]
-                    first_px = self._body_2d_to_screen(first_pt[0], first_pt[1], cx, cy)
-                    dist_px = np.hypot(event.position().x() - first_px.x(), event.position().y() - first_px.y())
-                    if dist_px < 15.0:
-                        self._close_polygon()
+                    # Si hay chasis definido, el arrastre traslada la geometría del chasis
+                    if self.platform and self.platform.has_dimensions:
+                        self._moving_chassis = True
+                        self._chassis_moved = False
+                        self._last_mouse_pos = event.position()
+                        self.setCursor(Qt.ClosedHandCursor)
+                        event.accept()
+                        return
+                    else:
+                        self._dragging = True
+                        self._last_mouse_pos = event.position()
+                        self.setCursor(Qt.ClosedHandCursor)
                         event.accept()
                         return
 
-                self._polygon_vertices.append((u_snap, v_snap))
-                self.update()
+                elif self.active_tool == "Vértices":
+                    if self.platform and self.platform.has_dimensions:
+                        self.platform.ensure_polygon()
+                        w, h = float(self.width()), float(self.height())
+                        cx = w / 2.0 + self.pan_x
+                        cy = h / 2.0 + self.pan_y
+                        pos = event.position()
+                        verts = self._get_view_vertices()
+                        for idx, (u, v, _) in enumerate(verts):
+                            scr_pt = self._body_2d_to_screen(u, v, cx, cy)
+                            if np.hypot(pos.x() - scr_pt.x(), pos.y() - scr_pt.y()) <= 14.0:
+                                self._dragging_vertex_idx = idx
+                                self._vertex_moved = False
+                                self._drag_start_bounds = dict(self.platform.get_bounding_box())
+                                self._drag_start_polygon = [list(p) for p in self.platform.chassis_polygon] if self.platform.chassis_polygon else None
+                                self.setCursor(Qt.CrossCursor)
+                                self.update()
+                                event.accept()
+                                return
+
+                elif self.active_tool == "Dibujar":
+                    # Si se está editando un sensor, ubicarlo directamente en la coordenada con snap
+                    if self.editing_sensor_code and self.platform and self.editing_sensor_code in self.platform.sensors:
+                        w, h = float(self.width()), float(self.height())
+                        cx = w / 2.0 + self.pan_x
+                        cy = h / 2.0 + self.pan_y
+                        u_raw, v_raw = self._screen_to_body_2d(event.position(), cx, cy)
+                        u_snap = self._snap_coord(u_raw)
+                        v_snap = self._snap_coord(v_raw)
+                        sens = self.platform.sensors[self.editing_sensor_code]
+                        arm = list(sens.lever_arm_b)
+                        if self.view_type == "S":
+                            arm[0] = round(u_snap, 4)
+                            arm[1] = round(v_snap, 4)
+                        elif self.view_type == "F":
+                            arm[1] = round(u_snap, 4)
+                            arm[2] = round(v_snap, 4)
+                        else:  # L
+                            arm[0] = round(u_snap, 4)
+                            arm[2] = round(v_snap, 4)
+                        sens.lever_arm_b = np.array(arm, dtype=np.float64)
+                        self.sensor_placed.emit(sens.code, float(arm[0]), float(arm[1]), float(arm[2]))
+                        self.update()
+                        event.accept()
+                        return
+
+                    self._box_start_pos = event.position()
+                    w, h = float(self.width()), float(self.height())
+                    cx = w / 2.0 + self.pan_x
+                    cy = h / 2.0 + self.pan_y
+                    u_raw, v_raw = self._screen_to_body_2d(event.position(), cx, cy)
+                    u_snap = self._snap_coord(u_raw)
+                    v_snap = self._snap_coord(v_raw)
+
+                    # Si hace clic cerca del primer vértice (distancia < 15px en pantalla) y hay >= 3 vértices: cerrar polígono
+                    if len(self._polygon_vertices) >= 3:
+                        first_pt = self._polygon_vertices[0]
+                        first_px = self._body_2d_to_screen(first_pt[0], first_pt[1], cx, cy)
+                        dist_px = np.hypot(event.position().x() - first_px.x(), event.position().y() - first_px.y())
+                        if dist_px < 15.0:
+                            self._close_polygon()
+                            event.accept()
+                            return
+
+                    self._polygon_vertices.append((u_snap, v_snap))
+                    self.update()
+                    event.accept()
+                    return
+
+            # Si no está en edición activa o la herramienta no capturó el clic,
+            # pero la vista permite paneo (modo vista única), arrastrar la cámara
+            if self.allow_pan:
+                self._dragging = True
+                self._last_mouse_pos = event.position()
+                self.setCursor(Qt.ClosedHandCursor)
+                event.accept()
+                return
+            else:
+                # En 4Q (allow_pan == False), no permitir mover chasis ni arrastre de cámara
                 event.accept()
                 return
 
@@ -230,27 +404,159 @@ class OrthoCADCanvas(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent):
         self._current_mouse_pos = event.position()
-        if self._dragging:
+
+        # 1. Arrastre interactivo de vértices del polígono (Requerimiento Y - Vistas S, F, L)
+        if self.is_editing and self.allow_pan and self.active_tool == "Vértices":
+            if self._dragging_vertex_idx is not None and self.platform and self.platform.has_dimensions:
+                w, h = float(self.width()), float(self.height())
+                cx = w / 2.0 + self.pan_x
+                cy = h / 2.0 + self.pan_y
+                u_raw, v_raw = self._screen_to_body_2d(event.position(), cx, cy)
+                u_snap = self._snap_coord(u_raw)
+                v_snap = self._snap_coord(v_raw)
+
+                if self.view_type == "S":
+                    self.platform.ensure_polygon()
+                    if self.platform.chassis_polygon and 0 <= self._dragging_vertex_idx < len(self.platform.chassis_polygon):
+                        self.platform.chassis_polygon[self._dragging_vertex_idx] = [round(u_snap, 4), round(v_snap, 4)]
+                        pts = np.array(self.platform.chassis_polygon)
+                        self.platform.length_m = round(float(np.max(pts[:, 0]) - np.min(pts[:, 0])), 4)
+                        self.platform.width_m = round(float(np.max(pts[:, 1]) - np.min(pts[:, 1])), 4)
+                        self.platform.chassis_center_b[0] = round(float(np.mean(pts[:, 0])), 4)
+                        self.platform.chassis_center_b[1] = round(float(np.mean(pts[:, 1])), 4)
+                        self._vertex_moved = True
+                        self.update()
+                        event.accept()
+                        return
+                elif self.view_type == "F":
+                    self._apply_vertex_drag_front(self._dragging_vertex_idx, u_snap, v_snap)
+                    self._vertex_moved = True
+                    self.update()
+                    event.accept()
+                    return
+                elif self.view_type == "L":
+                    self._apply_vertex_drag_lateral(self._dragging_vertex_idx, u_snap, v_snap)
+                    self._vertex_moved = True
+                    self.update()
+                    event.accept()
+                    return
+            else:
+                # Detección de hover sobre vértices para feedback visual (Vistas S, F, L)
+                w, h = float(self.width()), float(self.height())
+                cx = w / 2.0 + self.pan_x
+                cy = h / 2.0 + self.pan_y
+                found_idx = None
+                if self.platform and self.platform.has_dimensions:
+                    pos = event.position()
+                    verts = self._get_view_vertices()
+                    for idx, (u, v, _) in enumerate(verts):
+                        scr_pt = self._body_2d_to_screen(u, v, cx, cy)
+                        if np.hypot(pos.x() - scr_pt.x(), pos.y() - scr_pt.y()) <= 14.0:
+                            found_idx = idx
+                            break
+                if found_idx != self._hovered_vertex_idx:
+                    self._hovered_vertex_idx = found_idx
+                    self.setCursor(Qt.PointingHandCursor if found_idx is not None else Qt.ArrowCursor)
+                    self.update()
+
+        # 2. Arrastre de sensor con ratón
+        if self.is_editing and self.allow_pan and self._moving_sensor and self.editing_sensor_code and self.platform:
+            sens = self.platform.sensors.get(self.editing_sensor_code)
+            if sens:
+                w, h = float(self.width()), float(self.height())
+                cx = w / 2.0 + self.pan_x
+                cy = h / 2.0 + self.pan_y
+                u_now, v_now = self._screen_to_body_2d(event.position(), cx, cy)
+                u_snap = self._snap_coord(u_now)
+                v_snap = self._snap_coord(v_now)
+                arm = list(sens.lever_arm_b)
+                if self.view_type == "S":
+                    arm[0] = round(u_snap, 4)
+                    arm[1] = round(v_snap, 4)
+                elif self.view_type == "F":
+                    arm[1] = round(u_snap, 4)
+                    arm[2] = round(v_snap, 4)
+                else:  # L
+                    arm[0] = round(u_snap, 4)
+                    arm[2] = round(v_snap, 4)
+                sens.lever_arm_b = np.array(arm, dtype=np.float64)
+                self.sensor_moved.emit(sens.code, float(arm[0]), float(arm[1]), float(arm[2]))
+                self.update()
+                event.accept()
+                return
+
+        # 3. Traslación del chasis completo
+        if self.is_editing and self.allow_pan and self._moving_chassis and self.platform and self.platform.has_dimensions:
+            w, h = float(self.width()), float(self.height())
+            cx = w / 2.0 + self.pan_x
+            cy = h / 2.0 + self.pan_y
+            u_prev, v_prev = self._screen_to_body_2d(self._last_mouse_pos, cx, cy)
+            u_now, v_now = self._screen_to_body_2d(event.position(), cx, cy)
+            du = u_now - u_prev
+            dv = v_now - v_prev
+
+            if self.snap_step_m and self.snap_step_m > 0:
+                du = round(du / self.snap_step_m) * self.snap_step_m
+                dv = round(dv / self.snap_step_m) * self.snap_step_m
+
+            if abs(du) > 1e-4 or abs(dv) > 1e-4:
+                if self.view_type == "S":
+                    self.platform.translate(du, dv, 0.0)
+                elif self.view_type == "F":
+                    self.platform.translate(0.0, du, dv)
+                else: # L
+                    self.platform.translate(du, 0.0, dv)
+                self._chassis_moved = True
+                self._last_mouse_pos = event.position()
+                self.update()
+            event.accept()
+            return
+        elif self._dragging:
             delta = event.position() - self._last_mouse_pos
             self.pan_x += delta.x()
             self.pan_y += delta.y()
             self._last_mouse_pos = event.position()
             self.update()
             event.accept()
-        elif self.active_tool == "Dibujar":
-            # Vista previa dinámica mientras mueve el ratón
+        elif self.is_editing and self.active_tool == "Dibujar":
             self.update()
             event.accept()
         else:
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        if self._dragging:
-            self._dragging = False
-            self.setCursor(Qt.OpenHandCursor if (self.active_tool == "Mover" and self.allow_pan) else Qt.ArrowCursor)
+        if self._moving_sensor:
+            self._moving_sensor = False
+            self.setCursor(Qt.OpenHandCursor if self.allow_pan else Qt.ArrowCursor)
             event.accept()
             return
-        elif self.active_tool == "Dibujar":
+        if self._dragging_vertex_idx is not None:
+            self._dragging_vertex_idx = None
+            self._drag_start_bounds = None
+            self._drag_start_polygon = None
+            self.setCursor(Qt.PointingHandCursor if (self._hovered_vertex_idx is not None) else Qt.ArrowCursor)
+            if self._vertex_moved:
+                self._vertex_moved = False
+                if self.platform:
+                    self.chassis_dimensions_changed.emit(self.platform.length_m, self.platform.width_m, self.platform.height_m)
+            self.update()
+            event.accept()
+            return
+        if self._moving_chassis:
+            self._moving_chassis = False
+            self.setCursor(Qt.OpenHandCursor if (self.is_editing and self.active_tool == "Mover") else (Qt.OpenHandCursor if self.allow_pan else Qt.ArrowCursor))
+            if self._chassis_moved:
+                self._chassis_moved = False
+                if self.platform:
+                    self.chassis_dimensions_changed.emit(self.platform.length_m, self.platform.width_m, self.platform.height_m)
+            event.accept()
+            return
+        elif self._dragging:
+            self._dragging = False
+            self.setCursor(Qt.OpenHandCursor if self.allow_pan else Qt.ArrowCursor)
+            event.accept()
+            return
+        elif self.is_editing and self.allow_pan and self.active_tool == "Dibujar":
             # Comprobar si fue un arrastre de caja envolvente desde el origen
             if self._box_start_pos is not None:
                 drag_dist = np.hypot(event.position().x() - self._box_start_pos.x(), event.position().y() - self._box_start_pos.y())
@@ -267,7 +573,9 @@ class OrthoCADCanvas(QWidget):
                     dv = max(0.05, abs(v_max - v_min))
                     du = self._snap_coord(du)
                     dv = self._snap_coord(dv)
-                    self._commit_box_dims(du, dv)
+                    u_c = (u_min + u_max) / 2.0
+                    v_c = (v_min + v_max) / 2.0
+                    self._commit_box_dims(du, dv, u_c, v_c)
                     self._polygon_vertices.clear()
                     self._box_start_pos = None
                     self.update()
@@ -277,14 +585,14 @@ class OrthoCADCanvas(QWidget):
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
-        if self.active_tool == "Dibujar":
+        if self.is_editing and self.allow_pan and self.active_tool == "Dibujar":
             if len(self._polygon_vertices) >= 3:
                 self._close_polygon()
                 event.accept()
                 return
         super().mouseDoubleClickEvent(event)
 
-    def _commit_box_dims(self, dim_u: float, dim_v: float):
+    def _commit_box_dims(self, dim_u: float, dim_v: float, u_c: float = 0.0, v_c: float = 0.0):
         if not self.platform:
             return
         prev_l = self.platform.length_m if self.platform.has_dimensions else 2.00
@@ -294,12 +602,26 @@ class OrthoCADCanvas(QWidget):
         if self.view_type == "S":
             # u = Xb (Largo), v = Yb (Ancho)
             l, w, h = dim_u, dim_v, prev_h
+            self.platform.chassis_center_b[0] = round(u_c, 4)
+            self.platform.chassis_center_b[1] = round(v_c, 4)
+            hl = l / 2.0
+            hw = w / 2.0
+            self.platform.chassis_polygon = [
+                [round(u_c + hl, 4), round(v_c - hw, 4)],
+                [round(u_c + hl, 4), round(v_c + hw, 4)],
+                [round(u_c - hl, 4), round(v_c + hw, 4)],
+                [round(u_c - hl, 4), round(v_c - hw, 4)]
+            ]
         elif self.view_type == "F":
             # u = Yb (Ancho), v = Zb (Alto)
             l, w, h = prev_l, dim_u, dim_v
+            self.platform.chassis_center_b[1] = round(u_c, 4)
+            self.platform.chassis_center_b[2] = round(v_c, 4)
         else: # L
             # u = Xb (Largo), v = Zb (Alto)
             l, w, h = dim_u, prev_w, dim_v
+            self.platform.chassis_center_b[0] = round(u_c, 4)
+            self.platform.chassis_center_b[2] = round(v_c, 4)
 
         self.platform.length_m = round(l, 4)
         self.platform.width_m = round(w, 4)
@@ -330,15 +652,27 @@ class OrthoCADCanvas(QWidget):
             w = extent_v
             h = prev_h
             # En vista Superior guardamos los vértices del polígono chasis [[xb, yb], ...]
-            self.platform.chassis_polygon = [[float(p[0]), float(p[1])] for p in pts]
+            self.platform.chassis_polygon = [[round(float(p[0]), 4), round(float(p[1]), 4)] for p in pts]
+            cx_poly = float(np.mean(pts[:, 0]))
+            cy_poly = float(np.mean(pts[:, 1]))
+            self.platform.chassis_center_b[0] = round(cx_poly, 4)
+            self.platform.chassis_center_b[1] = round(cy_poly, 4)
         elif self.view_type == "F":
             w = extent_u
             h = extent_v
             l = prev_l
+            cy_poly = float(np.mean(pts[:, 0]))
+            cz_poly = float(np.mean(pts[:, 1]))
+            self.platform.chassis_center_b[1] = round(cy_poly, 4)
+            self.platform.chassis_center_b[2] = round(cz_poly, 4)
         else: # L
             l = extent_u
             h = extent_v
             w = prev_w
+            cx_poly = float(np.mean(pts[:, 0]))
+            cz_poly = float(np.mean(pts[:, 1]))
+            self.platform.chassis_center_b[0] = round(cx_poly, 4)
+            self.platform.chassis_center_b[2] = round(cz_poly, 4)
 
         self.platform.length_m = round(l, 4)
         self.platform.width_m = round(w, 4)
@@ -382,6 +716,10 @@ class OrthoCADCanvas(QWidget):
         # 5. Previsualización de dibujo interactivo de polígono / chasis
         if self.active_tool == "Dibujar":
             self._draw_drawing_preview(painter, cx, cy, w, h)
+
+        # 5.1 Vértices interactivos del polígono (Requerimiento Y)
+        if self.active_tool == "Vértices" and self.is_editing and self.platform and self.platform.has_dimensions:
+            self._draw_vertices_handles(painter, cx, cy)
 
         # 6. Sensores montados
         if self.platform:
@@ -544,15 +882,13 @@ class OrthoCADCanvas(QWidget):
         p.drawText(QPointF(cx + 4, cy + 12), "PLA [0,0,0]")
 
     def _draw_chassis(self, p: QPainter, cx: float, cy: float):
-        l = self.platform.length_m
-        w = self.platform.width_m
-        h = self.platform.height_m
+        bounds = self.platform.get_bounding_box()
 
         pen_body = QPen(_to_qcolor(COLOR_PLATFORM_BODY), 2, Qt.DashLine)
         p.setPen(pen_body)
         p.setBrush(QBrush(QColor(2, 132, 199, 25)))
 
-        # 1. Si existe un polígono personalizado y estamos en vista Superior ("S"):
+        # 1. Geometría del chasis según la vista activa
         if self.view_type == "S" and self.platform.chassis_polygon and len(self.platform.chassis_polygon) >= 3:
             path = QPainterPath()
             pts = self.platform.chassis_polygon
@@ -566,45 +902,45 @@ class OrthoCADCanvas(QWidget):
             # Caja envolvente en línea de trazos tenue
             p.setPen(QPen(QColor(2, 132, 199, 100), 1, Qt.DotLine))
             p.setBrush(Qt.NoBrush)
-            rect_w = w * self.scale
-            rect_h = l * self.scale
-            p.drawRect(QRectF(cx - rect_w / 2.0, cy - rect_h / 2.0, rect_w, rect_h))
+            p_tl = self._body_2d_to_screen(bounds["x_max"], bounds["y_min"], cx, cy)
+            p_br = self._body_2d_to_screen(bounds["x_min"], bounds["y_max"], cx, cy)
+            p.drawRect(QRectF(p_tl, p_br))
         elif self.view_type == "S":
-            rect_w = w * self.scale
-            rect_h = l * self.scale
-            p.drawRect(QRectF(cx - rect_w / 2.0, cy - rect_h / 2.0, rect_w, rect_h))
+            p_tl = self._body_2d_to_screen(bounds["x_max"], bounds["y_min"], cx, cy)
+            p_br = self._body_2d_to_screen(bounds["x_min"], bounds["y_max"], cx, cy)
+            p.drawRect(QRectF(p_tl, p_br))
         elif self.view_type == "F":
-            rect_w = w * self.scale
-            rect_h = h * self.scale
-            p.drawRect(QRectF(cx - rect_w / 2.0, cy - rect_h / 2.0, rect_w, rect_h))
-        elif self.view_type == "L":
-            rect_w = l * self.scale
-            rect_h = h * self.scale
-            p.drawRect(QRectF(cx - rect_w / 2.0, cy - rect_h / 2.0, rect_w, rect_h))
+            # u = Yb, v = Zb
+            p_tl = self._body_2d_to_screen(bounds["y_min"], bounds["z_min"], cx, cy)
+            p_br = self._body_2d_to_screen(bounds["y_max"], bounds["z_max"], cx, cy)
+            p.drawRect(QRectF(p_tl, p_br))
+        else: # L
+            # u = Xb, v = Zb
+            p_tl = self._body_2d_to_screen(bounds["x_min"], bounds["z_min"], cx, cy)
+            p_br = self._body_2d_to_screen(bounds["x_max"], bounds["z_max"], cx, cy)
+            p.drawRect(QRectF(p_tl, p_br))
 
         # 2. Líneas envolventes proyectadas hacia los márgenes
         p.setPen(QPen(QColor(2, 132, 199, 50), 1, Qt.DashDotLine))
         if self.view_type == "S":
-            rw = w * self.scale
-            rl = l * self.scale
-            p.drawLine(QPointF(cx - rw / 2.0, 0), QPointF(cx - rw / 2.0, self.height()))
-            p.drawLine(QPointF(cx + rw / 2.0, 0), QPointF(cx + rw / 2.0, self.height()))
-            p.drawLine(QPointF(0, cy - rl / 2.0), QPointF(self.width(), cy - rl / 2.0))
-            p.drawLine(QPointF(0, cy + rl / 2.0), QPointF(self.width(), cy + rl / 2.0))
+            p_tl = self._body_2d_to_screen(bounds["x_max"], bounds["y_min"], cx, cy)
+            p_br = self._body_2d_to_screen(bounds["x_min"], bounds["y_max"], cx, cy)
         elif self.view_type == "F":
-            rw = w * self.scale
-            rh = h * self.scale
-            p.drawLine(QPointF(cx - rw / 2.0, 0), QPointF(cx - rw / 2.0, self.height()))
-            p.drawLine(QPointF(cx + rw / 2.0, 0), QPointF(cx + rw / 2.0, self.height()))
-            p.drawLine(QPointF(0, cy - rh / 2.0), QPointF(self.width(), cy - rh / 2.0))
-            p.drawLine(QPointF(0, cy + rh / 2.0), QPointF(self.width(), cy + rh / 2.0))
-        elif self.view_type == "L":
-            rl = l * self.scale
-            rh = h * self.scale
-            p.drawLine(QPointF(cx - rl / 2.0, 0), QPointF(cx - rl / 2.0, self.height()))
-            p.drawLine(QPointF(cx + rl / 2.0, 0), QPointF(cx + rl / 2.0, self.height()))
-            p.drawLine(QPointF(0, cy - rh / 2.0), QPointF(self.width(), cy - rh / 2.0))
-            p.drawLine(QPointF(0, cy + rh / 2.0), QPointF(self.width(), cy + rh / 2.0))
+            p_tl = self._body_2d_to_screen(bounds["y_min"], bounds["z_min"], cx, cy)
+            p_br = self._body_2d_to_screen(bounds["y_max"], bounds["z_max"], cx, cy)
+        else: # L
+            p_tl = self._body_2d_to_screen(bounds["x_min"], bounds["z_min"], cx, cy)
+            p_br = self._body_2d_to_screen(bounds["x_max"], bounds["z_max"], cx, cy)
+
+        x_left = min(p_tl.x(), p_br.x())
+        x_right = max(p_tl.x(), p_br.x())
+        y_top = min(p_tl.y(), p_br.y())
+        y_bottom = max(p_tl.y(), p_br.y())
+
+        p.drawLine(QPointF(x_left, 0), QPointF(x_left, self.height()))
+        p.drawLine(QPointF(x_right, 0), QPointF(x_right, self.height()))
+        p.drawLine(QPointF(0, y_top), QPointF(self.width(), y_top))
+        p.drawLine(QPointF(0, y_bottom), QPointF(self.width(), y_bottom))
 
     def _draw_drawing_preview(self, p: QPainter, cx: float, cy: float, w: int, h: int):
         """Muestra los vértices trazados y la línea guía con snapping activo."""
@@ -651,6 +987,175 @@ class OrthoCADCanvas(QWidget):
             p.setFont(font_hud)
             snap_txt = f"[{u_snap:+.2f}, {v_snap:+.2f}] (Clic: Vértice | Doble-clic: Cerrar)"
             p.drawText(QPointF(snapped_px.x() + 10, snapped_px.y() - 6), snap_txt)
+
+    def _get_view_vertices(self) -> List[Tuple[float, float, str]]:
+        """Devuelve los vértices proyectados (u, v, rótulo) según la vista activa (S, F, L)."""
+        if not self.platform or not self.platform.has_dimensions:
+            return []
+
+        if self.view_type == "S":
+            self.platform.ensure_polygon()
+            if not self.platform.chassis_polygon:
+                return []
+            return [
+                (float(pt[0]), float(pt[1]), f"V{i + 1} [{pt[0]:+.2f}, {pt[1]:+.2f}]")
+                for i, pt in enumerate(self.platform.chassis_polygon)
+            ]
+
+        bounds = self.platform.get_bounding_box()
+        if self.view_type == "F":
+            # Proyección Frontal: u = Yb (Ancho), v = Zb (Alto, positivo hacia abajo)
+            y_min, y_max = bounds["y_min"], bounds["y_max"]
+            z_min, z_max = bounds["z_min"], bounds["z_max"]
+            return [
+                (y_min, z_min, f"V1 [{y_min:+.2f}, {z_min:+.2f}]"),
+                (y_max, z_min, f"V2 [{y_max:+.2f}, {z_min:+.2f}]"),
+                (y_max, z_max, f"V3 [{y_max:+.2f}, {z_max:+.2f}]"),
+                (y_min, z_max, f"V4 [{y_min:+.2f}, {z_max:+.2f}]"),
+            ]
+        else:  # L
+            # Proyección Lateral: u = Xb (Largo), v = Zb (Alto, positivo hacia abajo)
+            x_min, x_max = bounds["x_min"], bounds["x_max"]
+            z_min, z_max = bounds["z_min"], bounds["z_max"]
+            return [
+                (x_min, z_min, f"V1 [{x_min:+.2f}, {z_min:+.2f}]"),
+                (x_max, z_min, f"V2 [{x_max:+.2f}, {z_min:+.2f}]"),
+                (x_max, z_max, f"V3 [{x_max:+.2f}, {z_max:+.2f}]"),
+                (x_min, z_max, f"V4 [{x_min:+.2f}, {z_max:+.2f}]"),
+            ]
+
+    def _apply_vertex_drag_front(self, idx: int, u_snap: float, v_snap: float):
+        """Ajusta límites métricos, dimensiones y escala transversal en Vista Frontal (F)."""
+        if not self.platform or not self._drag_start_bounds:
+            return
+        y_min_0 = self._drag_start_bounds["y_min"]
+        y_max_0 = self._drag_start_bounds["y_max"]
+        z_min_0 = self._drag_start_bounds["z_min"]
+        z_max_0 = self._drag_start_bounds["z_max"]
+
+        if idx == 0:  # V1: Top-Left (Izquierda - Arriba)
+            y_min = min(u_snap, y_max_0 - 0.05)
+            z_min = min(v_snap, z_max_0 - 0.05)
+            y_max = y_max_0
+            z_max = z_max_0
+        elif idx == 1:  # V2: Top-Right (Derecha - Arriba)
+            y_min = y_min_0
+            z_min = min(v_snap, z_max_0 - 0.05)
+            y_max = max(u_snap, y_min_0 + 0.05)
+            z_max = z_max_0
+        elif idx == 2:  # V3: Bottom-Right (Derecha - Abajo)
+            y_min = y_min_0
+            z_min = z_min_0
+            y_max = max(u_snap, y_min_0 + 0.05)
+            z_max = max(v_snap, z_min_0 + 0.05)
+        elif idx == 3:  # V4: Bottom-Left (Izquierda - Abajo)
+            y_min = min(u_snap, y_max_0 - 0.05)
+            z_min = z_min_0
+            y_max = y_max_0
+            z_max = max(v_snap, z_min_0 + 0.05)
+        else:
+            return
+
+        new_w = max(0.05, y_max - y_min)
+        new_h = max(0.05, z_max - z_min)
+        cy = (y_min + y_max) / 2.0
+        cz = (z_min + z_max) / 2.0
+
+        self.platform.width_m = round(float(new_w), 4)
+        self.platform.height_m = round(float(new_h), 4)
+        self.platform.chassis_center_b[1] = round(float(cy), 4)
+        self.platform.chassis_center_b[2] = round(float(cz), 4)
+
+        if self._drag_start_polygon:
+            span_y_0 = y_max_0 - y_min_0
+            factor_y = (y_max - y_min) / span_y_0 if span_y_0 > 1e-4 else 1.0
+            self.platform.chassis_polygon = [
+                [pt[0], round(float(y_min + (pt[1] - y_min_0) * factor_y), 4)]
+                for pt in self._drag_start_polygon
+            ]
+
+    def _apply_vertex_drag_lateral(self, idx: int, u_snap: float, v_snap: float):
+        """Ajusta límites métricos, dimensiones y escala longitudinal en Vista Lateral (L)."""
+        if not self.platform or not self._drag_start_bounds:
+            return
+        x_min_0 = self._drag_start_bounds["x_min"]
+        x_max_0 = self._drag_start_bounds["x_max"]
+        z_min_0 = self._drag_start_bounds["z_min"]
+        z_max_0 = self._drag_start_bounds["z_max"]
+
+        if idx == 0:  # V1: Top-Left (Atrás - Arriba)
+            x_min = min(u_snap, x_max_0 - 0.05)
+            z_min = min(v_snap, z_max_0 - 0.05)
+            x_max = x_max_0
+            z_max = z_max_0
+        elif idx == 1:  # V2: Top-Right (Adelante - Arriba)
+            x_min = x_min_0
+            z_min = min(v_snap, z_max_0 - 0.05)
+            x_max = max(u_snap, x_min_0 + 0.05)
+            z_max = z_max_0
+        elif idx == 2:  # V3: Bottom-Right (Adelante - Abajo)
+            x_min = x_min_0
+            z_min = z_min_0
+            x_max = max(u_snap, x_min_0 + 0.05)
+            z_max = max(v_snap, z_min_0 + 0.05)
+        elif idx == 3:  # V4: Bottom-Left (Atrás - Abajo)
+            x_min = min(u_snap, x_max_0 - 0.05)
+            z_min = z_min_0
+            x_max = x_max_0
+            z_max = max(v_snap, z_min_0 + 0.05)
+        else:
+            return
+
+        new_l = max(0.05, x_max - x_min)
+        new_h = max(0.05, z_max - z_min)
+        cx = (x_min + x_max) / 2.0
+        cz = (z_min + z_max) / 2.0
+
+        self.platform.length_m = round(float(new_l), 4)
+        self.platform.height_m = round(float(new_h), 4)
+        self.platform.chassis_center_b[0] = round(float(cx), 4)
+        self.platform.chassis_center_b[2] = round(float(cz), 4)
+
+        if self._drag_start_polygon:
+            span_x_0 = x_max_0 - x_min_0
+            factor_x = (x_max - x_min) / span_x_0 if span_x_0 > 1e-4 else 1.0
+            self.platform.chassis_polygon = [
+                [round(float(x_min + (pt[0] - x_min_0) * factor_x), 4), pt[1]]
+                for pt in self._drag_start_polygon
+            ]
+
+    def _draw_vertices_handles(self, p: QPainter, cx: float, cy: float):
+        """Dibuja nodos manipulables con ratón sobre cada vértice en vistas S, F y L (Requerimiento Y)."""
+        if not self.platform or not self.platform.has_dimensions:
+            return
+
+        font_v = QFont("Segoe UI", 8, QFont.Bold)
+        p.setFont(font_v)
+
+        verts = self._get_view_vertices()
+        for idx, (u, v, lbl) in enumerate(verts):
+            scr_pos = self._body_2d_to_screen(u, v, cx, cy)
+            is_active = (idx == self._dragging_vertex_idx or idx == self._hovered_vertex_idx)
+
+            if is_active:
+                # Halo exterior ámbar
+                p.setPen(QPen(QColor(245, 158, 11, 120), 6))
+                p.setBrush(Qt.NoBrush)
+                p.drawEllipse(scr_pos, 7.0, 7.0)
+
+                # Nodo central
+                p.setPen(QPen(QColor(217, 119, 6), 2))
+                p.setBrush(QBrush(QColor(254, 243, 199)))
+                p.drawEllipse(scr_pos, 5.0, 5.0)
+
+                # Rótulo de coordenadas métricas
+                p.setPen(QPen(QColor(30, 41, 59, 230), 1))
+                p.drawText(QPointF(scr_pos.x() + 9, scr_pos.y() - 5), lbl)
+            else:
+                # Nodo estándar CAD: círculo blanco con borde azul técnico
+                p.setPen(QPen(QColor(2, 132, 199), 2))
+                p.setBrush(QBrush(QColor(255, 255, 255)))
+                p.drawEllipse(scr_pos, 4.5, 4.5)
 
     def _draw_sensors(self, p: QPainter, cx: float, cy: float):
         font = QFont("Segoe UI", 9)
@@ -748,10 +1253,13 @@ class OrthoCADWidget(QWidget):
     """Contenedor de la pestaña de plataforma que gestiona modo 4 cuadrantes o vista única con QStackedWidget."""
 
     chassis_updated = Signal()
+    sensor_placed = Signal(str, float, float, float)
+    sensor_moved = Signal(str, float, float, float)
 
     def __init__(self, platform: Platform, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.platform = platform
+        self.is_editing: bool = False
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(4, 4, 4, 4)
@@ -850,6 +1358,8 @@ class OrthoCADWidget(QWidget):
         for c in self.canvases:
             c.set_platform(platform)
             c.chassis_dimensions_changed.connect(self._on_chassis_drawn)
+            c.sensor_placed.connect(self._on_sensor_placed)
+            c.sensor_moved.connect(self._on_sensor_moved)
 
         # Sincronización continua de escala de zoom entre los 3 cuadrantes S, F, L
         self.canvas_top.scale_changed.connect(lambda s: self._on_quad_scale_changed(s, self.canvas_top))
@@ -870,6 +1380,20 @@ class OrthoCADWidget(QWidget):
         for c in self.canvases:
             c.update()
         self.chassis_updated.emit()
+
+    def _on_sensor_placed(self, code: str, x: float, y: float, z: float):
+        for c in self.canvases:
+            c.update()
+        self.sensor_placed.emit(code, x, y, z)
+
+    def _on_sensor_moved(self, code: str, x: float, y: float, z: float):
+        for c in self.canvases:
+            c.update()
+        self.sensor_moved.emit(code, x, y, z)
+
+    def set_editing_sensor(self, sensor_code: Optional[str]):
+        for c in self.canvases:
+            c.editing_sensor_code = sensor_code
 
     def set_active_tool(self, tool_name: str):
         for c in self.canvases:
@@ -925,6 +1449,26 @@ class OrthoCADWidget(QWidget):
         self.canvas_single.view_type = view_key.upper()
         self.canvas_single.update()
 
+    def set_editing_lock(self, locked: bool):
+        """
+        Bloquea o desbloquea el modo 4 cuadrantes durante la edición.
+        En cualquier tipo de edición NO se permite usar la vista 4Q (SFLLeyenda).
+        """
+        self.btn_quad.setEnabled(not locked)
+        if locked and self.is_quad_mode:
+            self.set_single_view("S")
+        self.set_editing_mode(locked)
+
+    def set_editing_mode(self, enabled: bool):
+        """Propaga el estado de edición interactiva a todos los lienzos ortogonales."""
+        self.is_editing = enabled
+        for c in self.canvases:
+            c.set_editing_mode(enabled)
+
+    def get_active_view(self) -> str:
+        """Devuelve la vista ortogonal activa ('S', 'F' o 'L')."""
+        return self.canvas_single.view_type
+
     def center_origin(self):
         for c in self.canvases:
             c.center_origin()
@@ -937,3 +1481,4 @@ class OrthoCADWidget(QWidget):
         for c in self.canvases:
             c.set_platform(self.platform)
             c.update()
+
