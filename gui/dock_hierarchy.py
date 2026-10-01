@@ -10,7 +10,7 @@ Panel lateral de capas con árbol jerárquico nativo:
 from pathlib import Path
 from typing import Callable, Optional
 from PySide6.QtWidgets import (
-    QDockWidget, QTreeWidget, QTreeWidgetItem, QMenu, QWidget,
+    QDockWidget, QTreeWidget, QTreeWidgetItem, QTreeWidgetItemIterator, QMenu, QWidget,
     QVBoxLayout, QMessageBox
 )
 from PySide6.QtCore import Qt, Signal, QSize
@@ -24,12 +24,21 @@ ICONS_DIR = Path(__file__).resolve().parent.parent / "icons"
 class HierarchyDock(QDockWidget):
     """Panel de capas y jerarquía con QTreeWidget nativo e iconografía vectorial."""
 
-    platform_activated = Signal(str)      # plat_id
-    chassis_clicked = Signal(str)         # plat_id (mantenido por compatibilidad)
-    sensor_selected = Signal(str, str)    # plat_id, sensor_code
-    center_origin_requested = Signal(str) # plat_id
-    center_centroid_requested = Signal(str) # plat_id
-    add_sensor_requested = Signal(str)    # plat_id
+    platform_activated = Signal(str)           # plat_id
+    chassis_clicked = Signal(str)              # plat_id (mantenido por compatibilidad)
+    sensor_selected = Signal(str, str)         # plat_id, sensor_code
+    center_origin_requested = Signal(str)      # plat_id
+    center_centroid_requested = Signal(str)    # plat_id
+    add_sensor_requested = Signal(str)         # plat_id
+    import_sensors_requested = Signal(str)      # plat_id
+    platform_properties_requested = Signal(str)# plat_id
+    delete_platform_requested = Signal(str)    # plat_id
+    chassis_edit_requested = Signal(str)       # plat_id
+    chassis_clear_requested = Signal(str)      # plat_id
+    sensor_edit_requested = Signal(str, str)   # plat_id, sensor_code
+    sensor_zoom_requested = Signal(str, str)   # plat_id, sensor_code
+    sensor_properties_requested = Signal(str, str) # plat_id, sensor_code
+    delete_sensor_requested = Signal(str, str) # plat_id, sensor_code
 
     def __init__(
         self,
@@ -140,7 +149,7 @@ class HierarchyDock(QDockWidget):
             for code, s in plat.sensors.items():
                 is_editing_sens = (plat_id == self.editing_platform_id and code == self.editing_sensor_code)
                 sens_star = "* " if is_editing_sens else ""
-                s_label = f"{sens_star}{code:<6s} [{s.sensor_type.value[:3]}] {s.name}"
+                s_label = f"{sens_star}{s.name} [{s.sensor_type.value[:3]}]"
                 s_item = QTreeWidgetItem(sens_root, [s_label])
                 s_item.setData(0, Qt.UserRole, {"type": "sensor", "plat_id": plat_id, "code": code})
                 if is_editing_sens:
@@ -201,12 +210,18 @@ class HierarchyDock(QDockWidget):
         item = self.tree.itemAt(pos)
         if not item:
             return
+        self.tree.setCurrentItem(item)
+        item.setSelected(True)
         data = item.data(0, Qt.UserRole)
         if not data:
             return
 
         itype = data.get("type")
         plat_id = data.get("plat_id")
+        if itype == "sensor" and plat_id:
+            code = data.get("code")
+            self.sensor_selected.emit(plat_id, code)
+
         menu = QMenu(self)
 
         if itype == "platform" and plat_id:
@@ -221,24 +236,55 @@ class HierarchyDock(QDockWidget):
             act_centroid.triggered.connect(lambda: self.center_centroid_requested.emit(plat_id))
 
             menu.addSeparator()
-            act_add_sens = menu.addAction("Añadir Sensor al Rig...")
-            act_add_sens.triggered.connect(lambda: self.add_sensor_requested.emit(plat_id))
+            menu_sens = menu.addMenu("Crear sensores")
+            act_add_zero = menu_sens.addAction("De cero...")
+            act_add_zero.triggered.connect(lambda: self.add_sensor_requested.emit(plat_id))
+            act_add_file = menu_sens.addAction("A partir de fichero...")
+            act_add_file.triggered.connect(lambda: self.import_sensors_requested.emit(plat_id))
+
+            act_props = menu.addAction("Propiedades...")
+            act_props.triggered.connect(lambda: self.platform_properties_requested.emit(plat_id))
 
             menu.addSeparator()
             act_del = menu.addAction("Eliminar Plataforma")
-            act_del.triggered.connect(lambda: self._delete_platform(plat_id))
+            act_del.triggered.connect(lambda: self.delete_platform_requested.emit(plat_id))
 
         elif itype == "chassis" and plat_id:
-            act_origin = menu.addAction("Centrar al Origen [0, 0]")
+            act_edit = menu.addAction("Editar")
+            act_edit.triggered.connect(lambda: self.chassis_edit_requested.emit(plat_id))
+
+            menu.addSeparator()
+            act_origin = menu.addAction("Centrar al Origen [0, 0, 0]")
             act_origin.triggered.connect(lambda: self.center_origin_requested.emit(plat_id))
 
             act_centroid = menu.addAction("Centrar al Centroide")
             act_centroid.triggered.connect(lambda: self.center_centroid_requested.emit(plat_id))
 
+            menu.addSeparator()
+            act_clear = menu.addAction("Limpiar")
+            act_clear.triggered.connect(lambda: self.chassis_clear_requested.emit(plat_id))
+
+        elif itype == "sensors_group" and plat_id:
+            menu_create = menu.addMenu("Crear sensores")
+            act_zero = menu_create.addAction("De cero...")
+            act_zero.triggered.connect(lambda: self.add_sensor_requested.emit(plat_id))
+            act_file = menu_create.addAction("A partir de fichero...")
+            act_file.triggered.connect(lambda: self.import_sensors_requested.emit(plat_id))
+
         elif itype == "sensor" and plat_id:
             code = data.get("code")
+            act_edit = menu.addAction("Editar")
+            act_edit.triggered.connect(lambda: self.sensor_edit_requested.emit(plat_id, code))
+
+            act_zoom = menu.addAction("Hacer zoom")
+            act_zoom.triggered.connect(lambda: self.sensor_zoom_requested.emit(plat_id, code))
+
+            act_props = menu.addAction("Propiedades...")
+            act_props.triggered.connect(lambda: self.sensor_properties_requested.emit(plat_id, code))
+
+            menu.addSeparator()
             act_del_s = menu.addAction(f"Eliminar Sensor {code}")
-            act_del_s.triggered.connect(lambda: self._delete_sensor(plat_id, code))
+            act_del_s.triggered.connect(lambda: self.delete_sensor_requested.emit(plat_id, code))
 
         menu.exec(self.tree.mapToGlobal(pos))
 
@@ -280,3 +326,17 @@ class HierarchyDock(QDockWidget):
             if data and data.get("type") == "sensor":
                 return data.get("code")
         return None
+
+    def select_sensor_item(self, sensor_code: Optional[str]):
+        """Selecciona y resalta el nodo del sensor correspondiente en el árbol."""
+        if not sensor_code:
+            return
+        it = QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            item = it.value()
+            data = item.data(0, Qt.UserRole)
+            if data and data.get("type") == "sensor" and data.get("code") == sensor_code:
+                self.tree.setCurrentItem(item)
+                item.setSelected(True)
+                return
+            it += 1

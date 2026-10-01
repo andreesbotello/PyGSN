@@ -49,6 +49,7 @@ class OrthoCADCanvas(QWidget):
     chassis_dimensions_changed = Signal(float, float, float) # length, width, height
     sensor_placed = Signal(str, float, float, float) # code, x, y, z
     sensor_moved = Signal(str, float, float, float)
+    sensor_clicked = Signal(str) # code del sensor clickeado
 
     # Pasos de cuadrícula dinámicos disponibles en metros
     GRID_STEPS_M: List[float] = [0.001, 0.005, 0.010, 0.050, 0.100, 0.500, 1.000, 5.000]
@@ -68,6 +69,7 @@ class OrthoCADCanvas(QWidget):
         self.active_tool: str = "Navegar" # Modo por defecto
         self.snap_step_m: Optional[float] = 0.05 # 5 cm por defecto
         self.editing_sensor_code: Optional[str] = None # Sensor activo en edición si aplica
+        self.selected_sensor_code: Optional[str] = None # Sensor seleccionado para inspección visual
 
         self._dragging: bool = False
         self._moving_chassis: bool = False
@@ -227,6 +229,49 @@ class OrthoCADCanvas(QWidget):
         self.pan_y = cy * self.scale
         self.update()
 
+    def set_selected_sensor(self, code: Optional[str]):
+        """Establece o deselecciona el sensor enfocado visualmente en el lienzo."""
+        if self.selected_sensor_code != code:
+            self.selected_sensor_code = code
+            self.update()
+
+    def _get_sensor_at_pos(self, pos: QPointF) -> Optional[str]:
+        """Detecta si la posición del puntero en pantalla coincide con un sensor montado (radio 12px)."""
+        if not self.platform or not self.platform.sensors:
+            return None
+        w, h = float(self.width()), float(self.height())
+        cx = w / 2.0 + self.pan_x
+        cy = h / 2.0 + self.pan_y
+        for code, s in self.platform.sensors.items():
+            bx, by, bz = s.lever_arm_b[0], s.lever_arm_b[1], s.lever_arm_b[2]
+            if self.view_type == "S":
+                scr_pos = QPointF(cx + by * self.scale, cy - bx * self.scale)
+            elif self.view_type == "F":
+                scr_pos = QPointF(cx + by * self.scale, cy + bz * self.scale)
+            else:  # L
+                scr_pos = QPointF(cx + bx * self.scale, cy + bz * self.scale)
+            if np.hypot(pos.x() - scr_pos.x(), pos.y() - scr_pos.y()) <= 12.0:
+                return code
+        return None
+
+    def zoom_to_sensor(self, xb: float, yb: float, zb: float, target_scale: Optional[float] = 220.0):
+        """Enfoca y hace zoom sobre las coordenadas métricas 3D de un sensor en b-frame."""
+        if target_scale is not None:
+            self.scale = target_scale
+        else:
+            self.scale = max(self.scale, 200.0)
+
+        if self.view_type == "S":
+            cx, cy = yb, xb
+        elif self.view_type == "F":
+            cx, cy = yb, -zb
+        else: # L
+            cx, cy = xb, -zb
+
+        self.pan_x = -cx * self.scale
+        self.pan_y = cy * self.scale
+        self.update()
+
     def wheelEvent(self, event: QWheelEvent):
         delta = event.angleDelta().y()
         factor = 1.15 if delta > 0 else 0.85
@@ -283,6 +328,17 @@ class OrthoCADCanvas(QWidget):
     def mousePressEvent(self, event: QMouseEvent):
         self._mouse_press_pos = event.position()
         if event.button() == Qt.LeftButton:
+            # Comprobación de selección interactiva de sensor por clic
+            clicked_code = self._get_sensor_at_pos(event.position())
+            if clicked_code:
+                self.selected_sensor_code = clicked_code
+                self.sensor_clicked.emit(clicked_code)
+                self.update()
+                # Si no estamos en sesión de edición de este sensor con herramienta Mover, capturar clic aquí
+                if not (self.is_editing and self.allow_pan and self.active_tool == "Mover" and self.editing_sensor_code == clicked_code):
+                    event.accept()
+                    return
+
             # Si estamos en modo edición y la vista permite interacción activa (no 4Q)
             if self.is_editing and self.allow_pan:
                 if self.active_tool == "Mover":
@@ -1164,6 +1220,7 @@ class OrthoCADCanvas(QWidget):
 
     def _draw_sensors(self, p: QPainter, cx: float, cy: float):
         font = QFont("Segoe UI", 9)
+        font_bold = QFont("Segoe UI", 9, QFont.Bold)
         p.setFont(font)
 
         for code, s in self.platform.sensors.items():
@@ -1178,6 +1235,13 @@ class OrthoCADCanvas(QWidget):
             else: # L
                 sx = cx + bx * self.scale
                 sy = cy + bz * self.scale
+
+            is_selected = (code == self.editing_sensor_code or code == getattr(self, "selected_sensor_code", None))
+            if is_selected:
+                # Halo visual de selección técnica (cian translúcido)
+                p.setPen(QPen(QColor(14, 165, 233, 220), 2))
+                p.setBrush(QBrush(QColor(14, 165, 233, 50)))
+                p.drawEllipse(QPointF(sx, sy), 8.5, 8.5)
 
             stype = s.sensor_type.value
             if "GNSS" in stype:
@@ -1194,7 +1258,9 @@ class OrthoCADCanvas(QWidget):
             p.drawEllipse(QPointF(sx, sy), 4, 4)
 
             p.setPen(QPen(_to_qcolor(COLOR_TEXT_PRIMARY), 1))
-            p.drawText(QPointF(sx + 6, sy - 4), f"{code}")
+            p.setFont(font_bold if is_selected else font)
+            # Requerimiento A.G: mostrar el Nombre descriptivo del sensor, no su ID interno
+            p.drawText(QPointF(sx + 6, sy - 4), f"{s.name}")
 
     def _draw_scale_ruler(self, p: QPainter, w: int, h: int):
         """Dibuja en la esquina inferior izquierda la regla gráfica técnica con unidades activas."""
@@ -1260,6 +1326,7 @@ class OrthoCADWidget(QWidget):
     chassis_updated = Signal()
     sensor_placed = Signal(str, float, float, float)
     sensor_moved = Signal(str, float, float, float)
+    sensor_selected = Signal(str) # sensor_code
     view_changed = Signal(str)
 
     def __init__(self, platform: Platform, parent: Optional[QWidget] = None):
@@ -1366,6 +1433,7 @@ class OrthoCADWidget(QWidget):
             c.chassis_dimensions_changed.connect(self._on_chassis_drawn)
             c.sensor_placed.connect(self._on_sensor_placed)
             c.sensor_moved.connect(self._on_sensor_moved)
+            c.sensor_clicked.connect(self._on_sensor_clicked)
 
         # Sincronización continua de escala de zoom entre los 3 cuadrantes S, F, L
         self.canvas_top.scale_changed.connect(lambda s: self._on_quad_scale_changed(s, self.canvas_top))
@@ -1381,6 +1449,14 @@ class OrthoCADWidget(QWidget):
             if c is not sender:
                 c.scale = new_scale
                 c.update()
+
+    def _on_sensor_clicked(self, code: str):
+        self.set_selected_sensor(code)
+        self.sensor_selected.emit(code)
+
+    def set_selected_sensor(self, sensor_code: Optional[str]):
+        for c in self.canvases:
+            c.set_selected_sensor(sensor_code)
 
     def _on_chassis_drawn(self, l: float, w: float, h: float):
         for c in self.canvases:
@@ -1400,6 +1476,8 @@ class OrthoCADWidget(QWidget):
     def set_editing_sensor(self, sensor_code: Optional[str]):
         for c in self.canvases:
             c.editing_sensor_code = sensor_code
+            c.set_selected_sensor(sensor_code)
+            c.update()
 
     def set_active_tool(self, tool_name: str):
         for c in self.canvases:
@@ -1483,6 +1561,18 @@ class OrthoCADWidget(QWidget):
     def center_centroid(self):
         for c in self.canvases:
             c.center_centroid()
+
+    def zoom_to_sensor(self, sensor_code: str, target_scale: float = 220.0):
+        """Enfoca y hace zoom sobre el sensor especificado en todos los lienzos ortogonales."""
+        if not self.platform or sensor_code not in self.platform.sensors:
+            return
+        sens = self.platform.sensors[sensor_code]
+        arm = sens.lever_arm_b
+        xb, yb, zb = float(arm[0]), float(arm[1]), float(arm[2])
+        for c in self.canvases:
+            c.zoom_to_sensor(xb, yb, zb, target_scale)
+        if self.is_quad_mode:
+            self.canvas_top.scale_changed.emit(target_scale)
 
     def redraw_all(self):
         for c in self.canvases:

@@ -437,7 +437,8 @@ class ConsoleDock(QDockWidget):
             for c, s in plat.sensors.items():
                 arm = s.lever_arm_b
                 b_deg = s.boresight_deg
-                self.print_line(f"  {c:<6s} [{s.sensor_type.value:<6s}] arm=[{arm[0]:+.3f}, {arm[1]:+.3f}, {arm[2]:+.3f}]m  boresight=({b_deg[0]:.1f}, {b_deg[1]:.1f}, {b_deg[2]:.1f})°  {s.name}")
+                r_rpy, p_rpy, y_rpy = s.get_boresight_rpy()
+                self.print_line(f"  {c:<6s} [{s.sensor_type.value:<6s}] arm=[{arm[0]:+.3f}, {arm[1]:+.3f}, {arm[2]:+.3f}]m  (α,β,γ)=({b_deg[0]:.2f}, {b_deg[1]:.2f}, {b_deg[2]:.2f})° [RPY=({r_rpy:.2f}, {p_rpy:.2f}, {y_rpy:.2f})°]  {s.name}")
             self.print_line("")
             return
 
@@ -541,9 +542,11 @@ class ConsoleDock(QDockWidget):
                 r, p, y = plat.sensors[code].boresight_deg
                 plat.sensors[code].boresight_deg = (round(r + dr, 3), round(p + dp, 3), round(y + dy, 3))
                 nb = plat.sensors[code].boresight_deg
+                r_rpy, p_rpy, y_rpy = plat.sensors[code].get_boresight_rpy()
                 self.sensor_modified.emit()
-                self.print_line(f"[OK] Boresight de sensor {code} rotado por (dr={dr:+.2f}°, dp={dp:+.2f}°, dy={dy:+.2f}°).")
-                self.print_line(f"     Nueva orientación: Roll={nb[0]:.2f}°, Pitch={nb[1]:.2f}°, Yaw={nb[2]:.2f}°.\n")
+                self.print_line(f"[OK] Boresight de sensor '{plat.sensors[code].name}' [{code}] rotado por (dα={dr:+.2f}°, dβ={dp:+.2f}°, dγ={dy:+.2f}°).")
+                self.print_line(f"     Calibración (α, β, γ): ({nb[0]:.2f}°, {nb[1]:.2f}°, {nb[2]:.2f}°)")
+                self.print_line(f"     Actitud aeroespacial (Roll, Pitch, Yaw): ({r_rpy:.2f}°, {p_rpy:.2f}°, {y_rpy:.2f}°).\n")
             except ValueError:
                 self.print_line("Error: Los ángulos deben ser valores numéricos en grados.\n")
             return

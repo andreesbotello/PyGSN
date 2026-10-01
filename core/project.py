@@ -98,6 +98,15 @@ class Project:
         if plat_id in self.platforms:
             self.active_platform_id = plat_id
 
+    def remove_platform(self, plat_id: str) -> bool:
+        """Elimina una plataforma del proyecto y reajusta la plataforma activa."""
+        if plat_id in self.platforms:
+            del self.platforms[plat_id]
+            if self.active_platform_id == plat_id:
+                self.active_platform_id = next(iter(self.platforms.keys())) if self.platforms else None
+            return True
+        return False
+
     # -------------------------------------------------------------------------
     # Serializacion y Deserializacion
     # -------------------------------------------------------------------------

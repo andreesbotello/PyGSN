@@ -7,6 +7,12 @@ Incluye soporte desacoplado para conmutación futura a tema oscuro.
 """
 
 from typing import Tuple
+from pathlib import Path
+
+ICONS_DIR = Path(__file__).resolve().parent.parent / "icons"
+ARROW_DOWN_PATH = (ICONS_DIR / "arrow_down.svg").as_posix()
+ARROW_DOWN_LIGHT_PATH = (ICONS_DIR / "arrow_down_light.svg").as_posix()
+
 
 # ==============================================================================
 # PALETA TEMA CLARO (LIGHT THEME) — PREDETERMINADO
@@ -255,11 +261,35 @@ QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
     height: 0px;
 }
 
+QComboBox {
+    background-color: #ffffff;
+    border: 1px solid #ced4da;
+    border-radius: 3px;
+    color: #212529;
+    padding: 4px 24px 4px 6px;
+    selection-background-color: #e3f2fd;
+    selection-color: #0077b6;
+}
+
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: top right;
-    width: 20px;
+    width: 22px;
     border-left: 1px solid #ced4da;
+    border-top-right-radius: 3px;
+    border-bottom-right-radius: 3px;
+    background: transparent;
+}
+
+QComboBox::down-arrow {
+    image: url("__ARROW_DOWN__");
+    width: 10px;
+    height: 6px;
+}
+
+QComboBox::down-arrow:disabled {
+    image: url("__ARROW_DOWN__");
+    opacity: 0.35;
 }
 
 QComboBox QAbstractItemView {
@@ -516,6 +546,9 @@ QStatusBar {
     font-size: 11px;
 }
 """
+
+PYGSN_LIGHT_QSS = PYGSN_LIGHT_QSS.replace("__ARROW_DOWN__", ARROW_DOWN_PATH)
+PYGSN_DARK_QSS = PYGSN_DARK_QSS.replace("__ARROW_DOWN__", ARROW_DOWN_LIGHT_PATH)
 
 # Alias por defecto
 PYGSN_QSS = PYGSN_LIGHT_QSS
