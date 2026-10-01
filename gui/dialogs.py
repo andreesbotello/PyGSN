@@ -195,11 +195,25 @@ class DialogProjectProperties(BaseDialog):
 class DialogCreatePlatform(BaseDialog):
     """Diálogo para crear una nueva plataforma (vehículo o estación fija)."""
 
-    def __init__(self, existing_count: int = 0, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        existing_ids: Optional[list] = None,
+        existing_count: int = 0,
+        parent: Optional[QWidget] = None
+    ):
         super().__init__(parent)
         self.setWindowTitle("Crear Nueva Plataforma - PyGSN")
-        self.setFixedSize(460, 265)
+        self.setFixedSize(460, 245)
         self.setModal(True)
+
+        # Generación automática de identificador alfanumérico, consistente y explicativo
+        if existing_ids:
+            i = 1
+            while f"PLAT_{i:02d}" in existing_ids or f"PLAT_{i}" in existing_ids:
+                i += 1
+            self.auto_id = f"PLAT_{i:02d}"
+        else:
+            self.auto_id = f"PLAT_{existing_count + 1:02d}"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 12, 18, 12)
@@ -214,12 +228,8 @@ class DialogCreatePlatform(BaseDialog):
         form.setVerticalSpacing(6)
         form.setHorizontalSpacing(10)
 
-        default_id = f"PLAT_{existing_count + 1}"
-        self.input_id = QLineEdit(default_id)
-        form.addRow("Identificador Único:", self.input_id)
-
         self.input_name = QLineEdit(f"Vehículo {existing_count + 1}")
-        form.addRow("Nombre Descriptivo:", self.input_name)
+        form.addRow("Nombre de Plataforma:", self.input_name)
 
         self.combo_type = QComboBox()
         self.combo_type.addItems(["VEHICLE", "ROVER", "CAR", "DRONE_X4", "BASE_STATION", "TEST_BENCH", "GENERIC"])
@@ -288,13 +298,12 @@ class DialogCreatePlatform(BaseDialog):
         self.spin_h.setEnabled(checked)
 
     def get_platform(self) -> Platform:
-        pid = self.input_id.text().strip().upper() or "PLAT_1"
-        pname = self.input_name.text().strip() or pid
+        pname = self.input_name.text().strip() or self.auto_id
         ptype = self.combo_type.currentText()
         is_fixed = self.check_fixed.isChecked()
         has_dims = self.check_dims.isChecked()
         return Platform(
-            id=pid,
+            id=self.auto_id,
             name=pname,
             platform_type=ptype,
             is_fixed=is_fixed,
@@ -305,77 +314,191 @@ class DialogCreatePlatform(BaseDialog):
         )
 
 
-class DialogAddSensor(BaseDialog):
-    """Diálogo para montar un sensor en la plataforma activa."""
+class DialogPlatformProperties(BaseDialog):
+    """Diálogo para consultar y modificar las propiedades de una plataforma existente."""
 
-    def __init__(self, platform_name: str, parent: Optional[QWidget] = None):
+    def __init__(self, platform: Platform, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setWindowTitle(f"Añadir Sensor a {platform_name} - PyGSN")
-        self.setFixedSize(500, 390)
+        self.platform = platform
+        self.setWindowTitle("Propiedades de la Plataforma - PyGSN")
+        self.setFixedSize(460, 200)
         self.setModal(True)
 
         layout = QVBoxLayout(self)
-        header = QLabel(f"Montaje en Plataforma: {platform_name}")
-        header.setStyleSheet("font-weight: bold; font-size: 13px; color: #b45309;")
+        layout.setContentsMargins(18, 12, 18, 12)
+        layout.setSpacing(6)
+
+        header = QLabel(f"Propiedades de Plataforma: {platform.name} [{platform.id}]")
+        header.setStyleSheet("font-weight: bold; font-size: 13px; color: #0077b6; margin: 0px; padding: 0px;")
         layout.addWidget(header)
 
         form = QFormLayout()
+        form.setContentsMargins(0, 4, 0, 4)
+        form.setVerticalSpacing(6)
+        form.setHorizontalSpacing(10)
 
-        self.input_code = QLineEdit("REC1")
-        form.addRow("Código / ID:", self.input_code)
+        self.input_name = QLineEdit(platform.name)
+        form.addRow("Nombre de Plataforma:", self.input_name)
+
+        self.combo_type = QComboBox()
+        self.combo_type.addItems(["VEHICLE", "ROVER", "CAR", "DRONE_X4", "BASE_STATION", "TEST_BENCH", "GENERIC"])
+        self.combo_type.setCurrentText(platform.platform_type)
+        form.addRow("Tipo de Plataforma:", self.combo_type)
+
+        self.check_fixed = QCheckBox("Estación fija de referencia (origen topocéntrico)")
+        self.check_fixed.setChecked(platform.is_fixed)
+        form.addRow("", self.check_fixed)
+
+        # Estado del chasis como información de solo lectura
+        if platform.has_dimensions:
+            dims_txt = f"Definido ({platform.length_m:.2f} x {platform.width_m:.2f} x {platform.height_m:.2f} m)"
+        else:
+            dims_txt = "Libre (sin dimensiones fijadas)"
+        lbl_chassis_status = QLabel(dims_txt)
+        lbl_chassis_status.setStyleSheet("color: #475569; font-weight: 500;")
+        form.addRow("Estado del Chasis:", lbl_chassis_status)
+
+        layout.addLayout(form)
+        layout.addSpacing(4)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        self.btn_apply = QPushButton("Aplicar Cambios")
+        self.btn_apply.clicked.connect(self.accept)
+        self.btn_cancel = QPushButton("Cancelar")
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_layout.addWidget(self.btn_apply)
+        btn_layout.addWidget(self.btn_cancel)
+        layout.addLayout(btn_layout)
+
+    def apply_changes(self):
+        self.platform.name = self.input_name.text().strip() or self.platform.name
+        self.platform.platform_type = self.combo_type.currentText()
+        self.platform.is_fixed = self.check_fixed.isChecked()
+
+
+class DialogAddSensor(BaseDialog):
+    """Diálogo técnico para montar un sensor en la plataforma activa."""
+
+    def __init__(self, platform_or_name: Any, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.platform = platform_or_name if isinstance(platform_or_name, Platform) else None
+        self.setWindowTitle("Añadir sensor")
+        self.setFixedSize(470, 350)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 12, 18, 12)
+        layout.setSpacing(6)
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 2, 0, 4)
+        form.setVerticalSpacing(6)
+        form.setHorizontalSpacing(10)
 
         self.input_name = QLineEdit("Antena GNSS Principal")
         form.addRow("Nombre Descriptivo:", self.input_name)
 
         self.combo_type = QComboBox()
         self.combo_type.addItems(["GNSS", "INS", "CAMERA", "LIDAR", "ODOMETER", "OTHER"])
+        self.combo_type.currentTextChanged.connect(self._on_type_changed)
         form.addRow("Tipo de Sensor:", self.combo_type)
         layout.addLayout(form)
 
-        group_arm = QGroupBox("Palanca de Brazo (Lever-Arm) en b-frame (m)")
-        arm_layout = QHBoxLayout(group_arm)
+        # Palanca de brazo (Lever-Arm) opcional (por defecto [0, 0, 0] para dibujar o acotar luego)
+        group_arm = QGroupBox("Posición del Sensor (Lever-Arm) en b-frame (m)")
+        arm_vbox = QVBoxLayout(group_arm)
+        arm_vbox.setContentsMargins(8, 4, 8, 6)
+        arm_vbox.setSpacing(4)
+
+        self.check_arm = QCheckBox("Definir posición de montaje inicial (Lever-Arm)")
+        self.check_arm.setChecked(False)
+        self.check_arm.toggled.connect(self._on_arm_toggled)
+        arm_vbox.addWidget(self.check_arm)
+
+        arm_layout = QHBoxLayout()
+        arm_layout.setSpacing(6)
         self.spin_arm_x = QDoubleSpinBox()
         self.spin_arm_x.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_arm_x.setRange(-100.0, 100.0)
         self.spin_arm_x.setDecimals(4)
+        self.spin_arm_x.setValue(0.0)
         self.spin_arm_x.setPrefix("Xb: ")
+        self.spin_arm_x.setEnabled(False)
+
         self.spin_arm_y = QDoubleSpinBox()
         self.spin_arm_y.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_arm_y.setRange(-100.0, 100.0)
         self.spin_arm_y.setDecimals(4)
+        self.spin_arm_y.setValue(0.0)
         self.spin_arm_y.setPrefix("Yb: ")
+        self.spin_arm_y.setEnabled(False)
+
         self.spin_arm_z = QDoubleSpinBox()
         self.spin_arm_z.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_arm_z.setRange(-100.0, 100.0)
         self.spin_arm_z.setDecimals(4)
+        self.spin_arm_z.setValue(0.0)
         self.spin_arm_z.setPrefix("Zb: ")
+        self.spin_arm_z.setEnabled(False)
+
         arm_layout.addWidget(self.spin_arm_x)
         arm_layout.addWidget(self.spin_arm_y)
         arm_layout.addWidget(self.spin_arm_z)
+        arm_vbox.addLayout(arm_layout)
         layout.addWidget(group_arm)
 
-        group_bore = QGroupBox("Ángulos de Boresight Euler (s-frame -> b-frame) (°)")
-        bore_layout = QHBoxLayout(group_bore)
-        self.spin_roll = QDoubleSpinBox()
-        self.spin_roll.setButtonSymbols(QAbstractSpinBox.NoButtons)
-        self.spin_roll.setRange(-180.0, 180.0)
-        self.spin_roll.setDecimals(4)
-        self.spin_roll.setPrefix("Roll: ")
-        self.spin_pitch = QDoubleSpinBox()
-        self.spin_pitch.setButtonSymbols(QAbstractSpinBox.NoButtons)
-        self.spin_pitch.setRange(-180.0, 180.0)
-        self.spin_pitch.setDecimals(4)
-        self.spin_pitch.setPrefix("Pitch: ")
-        self.spin_yaw = QDoubleSpinBox()
-        self.spin_yaw.setButtonSymbols(QAbstractSpinBox.NoButtons)
-        self.spin_yaw.setRange(-180.0, 180.0)
-        self.spin_yaw.setDecimals(4)
-        self.spin_yaw.setPrefix("Yaw: ")
-        bore_layout.addWidget(self.spin_roll)
-        bore_layout.addWidget(self.spin_pitch)
-        bore_layout.addWidget(self.spin_yaw)
+        # Orientación / Inclinación del Sensor (s-frame -> b-frame)
+        group_bore = QGroupBox("Inclinación / Orientación del Sensor (s-frame → b-frame)")
+        bore_vbox = QVBoxLayout(group_bore)
+        bore_vbox.setContentsMargins(8, 4, 8, 6)
+        bore_vbox.setSpacing(4)
+
+        conv_layout = QHBoxLayout()
+        conv_layout.setSpacing(6)
+        lbl_conv = QLabel("Convención:")
+        lbl_conv.setStyleSheet("color: #475569; font-weight: 500; font-size: 11px;")
+        self.combo_convention = QComboBox()
+        self.combo_convention.addItems([
+            "Calibración (α, β, γ) [s-frame → b-frame]",
+            "Actitud Aeroespacial (Roll, Pitch, Yaw)"
+        ])
+        self.combo_convention.currentIndexChanged.connect(self._on_convention_changed)
+        conv_layout.addWidget(lbl_conv)
+        conv_layout.addWidget(self.combo_convention, 1)
+        bore_vbox.addLayout(conv_layout)
+
+        bore_layout = QHBoxLayout()
+        bore_layout.setSpacing(6)
+
+        self.spin_ang1 = QDoubleSpinBox()
+        self.spin_ang1.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_ang1.setRange(-360.0, 360.0)
+        self.spin_ang1.setDecimals(4)
+        self.spin_ang1.setValue(0.0)
+        self.spin_ang1.setPrefix("α (X): ")
+
+        self.spin_ang2 = QDoubleSpinBox()
+        self.spin_ang2.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_ang2.setRange(-360.0, 360.0)
+        self.spin_ang2.setDecimals(4)
+        self.spin_ang2.setValue(0.0)
+        self.spin_ang2.setPrefix("β (Y): ")
+
+        self.spin_ang3 = QDoubleSpinBox()
+        self.spin_ang3.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_ang3.setRange(-360.0, 360.0)
+        self.spin_ang3.setDecimals(4)
+        self.spin_ang3.setValue(0.0)
+        self.spin_ang3.setPrefix("γ (Z): ")
+
+        bore_layout.addWidget(self.spin_ang1)
+        bore_layout.addWidget(self.spin_ang2)
+        bore_layout.addWidget(self.spin_ang3)
+        bore_vbox.addLayout(bore_layout)
         layout.addWidget(group_bore)
-        layout.addSpacing(10)
+
+        layout.addSpacing(4)
 
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
@@ -387,14 +510,281 @@ class DialogAddSensor(BaseDialog):
         btn_layout.addWidget(self.btn_cancel)
         layout.addLayout(btn_layout)
 
+    def _on_arm_toggled(self, checked: bool):
+        self.spin_arm_x.setEnabled(checked)
+        self.spin_arm_y.setEnabled(checked)
+        self.spin_arm_z.setEnabled(checked)
+
+    def _on_convention_changed(self, idx: int):
+        v1 = self.spin_ang1.value()
+        v2 = self.spin_ang2.value()
+        v3 = self.spin_ang3.value()
+
+        # Conversión exacta: Roll = -alpha, Pitch = -beta, Yaw = -gamma
+        new_v1 = -v1
+        new_v2 = -v2
+        new_v3 = -v3
+        if new_v3 < -180.0:
+            new_v3 += 360.0
+        elif new_v3 > 180.0:
+            new_v3 -= 360.0
+
+        self.spin_ang1.blockSignals(True)
+        self.spin_ang2.blockSignals(True)
+        self.spin_ang3.blockSignals(True)
+
+        self.spin_ang1.setValue(round(new_v1, 4))
+        self.spin_ang2.setValue(round(new_v2, 4))
+        self.spin_ang3.setValue(round(new_v3, 4))
+
+        if idx == 0:
+            self.spin_ang1.setPrefix("α (X): ")
+            self.spin_ang2.setPrefix("β (Y): ")
+            self.spin_ang3.setPrefix("γ (Z): ")
+        else:
+            self.spin_ang1.setPrefix("Roll: ")
+            self.spin_ang2.setPrefix("Pitch: ")
+            self.spin_ang3.setPrefix("Yaw: ")
+
+        self.spin_ang1.blockSignals(False)
+        self.spin_ang2.blockSignals(False)
+        self.spin_ang3.blockSignals(False)
+
+    def _on_type_changed(self, stype_str: str):
+        default_names = {
+            "GNSS": "Antena GNSS Principal",
+            "INS": "Unidad Inercial INS",
+            "CAMERA": "Cámara Fotogramétrica",
+            "LIDAR": "Sensor LiDAR 3D",
+            "ODOMETER": "Odómetro de Rueda",
+            "OTHER": "Sensor Auxiliar"
+        }
+        current_txt = self.input_name.text().strip()
+        if not current_txt or current_txt in default_names.values():
+            self.input_name.setText(default_names.get(stype_str, "Sensor"))
+
     def get_sensor(self) -> Sensor:
-        code = self.input_code.text().strip().upper() or "SENS_1"
-        name = self.input_name.text().strip() or code
         stype_str = self.combo_type.currentText()
         stype = getattr(SensorType, stype_str, SensorType.OTHER)
-        arm = np.array([self.spin_arm_x.value(), self.spin_arm_y.value(), self.spin_arm_z.value()], dtype=np.float64)
-        euler = (self.spin_roll.value(), self.spin_pitch.value(), self.spin_yaw.value())
-        return Sensor(code=code, name=name, sensor_type=stype, lever_arm_b=arm, boresight_euler_deg=euler)
+
+        # Generación interna de ID alfanumérico, consistente y explicativo
+        prefix_map = {
+            "GNSS": "GNSS",
+            "INS": "INS",
+            "CAMERA": "CAM",
+            "LIDAR": "LIDAR",
+            "ODOMETER": "ODO",
+            "OTHER": "SENS"
+        }
+        prefix = prefix_map.get(stype_str, "SENS")
+        existing_codes = set(self.platform.sensors.keys()) if self.platform else set()
+        i = 1
+        while f"{prefix}_{i:02d}" in existing_codes or f"{prefix}_{i}" in existing_codes:
+            i += 1
+        auto_code = f"{prefix}_{i:02d}"
+
+        name = self.input_name.text().strip() or auto_code
+
+        if self.check_arm.isChecked():
+            arm = np.array([self.spin_arm_x.value(), self.spin_arm_y.value(), self.spin_arm_z.value()], dtype=np.float64)
+        else:
+            arm = np.zeros(3, dtype=np.float64)
+
+        if self.combo_convention.currentIndex() == 1:
+            # En pantalla está Roll, Pitch, Yaw -> guardar canónicamente alpha, beta, gamma
+            r = self.spin_ang1.value()
+            p = self.spin_ang2.value()
+            y = self.spin_ang3.value()
+            boresight = (-r, -p, -y)
+        else:
+            boresight = (self.spin_ang1.value(), self.spin_ang2.value(), self.spin_ang3.value())
+
+        return Sensor(code=auto_code, name=name, sensor_type=stype, lever_arm_b=arm, boresight_deg=boresight)
+
+
+class DialogSensorProperties(BaseDialog):
+    """Diálogo para consultar y modificar las propiedades de un sensor montado."""
+
+    def __init__(self, sensor: Sensor, platform_name: str, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.sensor = sensor
+        self.setWindowTitle("Propiedades del Sensor - PyGSN")
+        self.setFixedSize(470, 360)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 12, 18, 12)
+        layout.setSpacing(6)
+
+        header = QLabel(f"Sensor: {sensor.name} [{sensor.code}] — Plataforma: {platform_name}")
+        header.setStyleSheet("font-weight: bold; font-size: 13px; color: #b45309; margin: 0px; padding: 0px;")
+        layout.addWidget(header)
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 4, 0, 4)
+        form.setVerticalSpacing(6)
+        form.setHorizontalSpacing(10)
+
+        self.input_name = QLineEdit(sensor.name)
+        form.addRow("Nombre Descriptivo:", self.input_name)
+
+        self.combo_type = QComboBox()
+        self.combo_type.addItems(["GNSS", "INS", "CAMERA", "LIDAR", "ODOMETER", "OTHER"])
+        self.combo_type.setCurrentText(sensor.sensor_type.value)
+        form.addRow("Tipo de Sensor:", self.combo_type)
+        layout.addLayout(form)
+
+        # Palanca de brazo (Lever-Arm)
+        group_arm = QGroupBox("Posición del Sensor (Lever-Arm) en b-frame (m)")
+        arm_layout = QHBoxLayout(group_arm)
+        arm_layout.setContentsMargins(8, 6, 8, 6)
+        arm_layout.setSpacing(6)
+
+        self.spin_arm_x = QDoubleSpinBox()
+        self.spin_arm_x.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_arm_x.setRange(-100.0, 100.0)
+        self.spin_arm_x.setDecimals(4)
+        self.spin_arm_x.setValue(float(sensor.lever_arm_b[0]))
+        self.spin_arm_x.setPrefix("Xb: ")
+
+        self.spin_arm_y = QDoubleSpinBox()
+        self.spin_arm_y.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_arm_y.setRange(-100.0, 100.0)
+        self.spin_arm_y.setDecimals(4)
+        self.spin_arm_y.setValue(float(sensor.lever_arm_b[1]))
+        self.spin_arm_y.setPrefix("Yb: ")
+
+        self.spin_arm_z = QDoubleSpinBox()
+        self.spin_arm_z.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_arm_z.setRange(-100.0, 100.0)
+        self.spin_arm_z.setDecimals(4)
+        self.spin_arm_z.setValue(float(sensor.lever_arm_b[2]))
+        self.spin_arm_z.setPrefix("Zb: ")
+
+        arm_layout.addWidget(self.spin_arm_x)
+        arm_layout.addWidget(self.spin_arm_y)
+        arm_layout.addWidget(self.spin_arm_z)
+        layout.addWidget(group_arm)
+
+        # Orientación / Inclinación del Sensor (s-frame -> b-frame)
+        group_bore = QGroupBox("Inclinación / Orientación del Sensor (s-frame → b-frame)")
+        bore_vbox = QVBoxLayout(group_bore)
+        bore_vbox.setContentsMargins(8, 4, 8, 6)
+        bore_vbox.setSpacing(4)
+
+        conv_layout = QHBoxLayout()
+        conv_layout.setSpacing(6)
+        lbl_conv = QLabel("Convención:")
+        lbl_conv.setStyleSheet("color: #475569; font-weight: 500; font-size: 11px;")
+        self.combo_convention = QComboBox()
+        self.combo_convention.addItems([
+            "Calibración (α, β, γ) [s-frame → b-frame]",
+            "Actitud Aeroespacial (Roll, Pitch, Yaw)"
+        ])
+        self.combo_convention.currentIndexChanged.connect(self._on_convention_changed)
+        conv_layout.addWidget(lbl_conv)
+        conv_layout.addWidget(self.combo_convention, 1)
+        bore_vbox.addLayout(conv_layout)
+
+        bore_layout = QHBoxLayout()
+        bore_layout.setSpacing(6)
+
+        b_deg = sensor.boresight_deg
+        self.spin_ang1 = QDoubleSpinBox()
+        self.spin_ang1.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_ang1.setRange(-360.0, 360.0)
+        self.spin_ang1.setDecimals(4)
+        self.spin_ang1.setValue(float(b_deg[0]))
+        self.spin_ang1.setPrefix("α (X): ")
+
+        self.spin_ang2 = QDoubleSpinBox()
+        self.spin_ang2.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_ang2.setRange(-360.0, 360.0)
+        self.spin_ang2.setDecimals(4)
+        self.spin_ang2.setValue(float(b_deg[1]))
+        self.spin_ang2.setPrefix("β (Y): ")
+
+        self.spin_ang3 = QDoubleSpinBox()
+        self.spin_ang3.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_ang3.setRange(-360.0, 360.0)
+        self.spin_ang3.setDecimals(4)
+        self.spin_ang3.setValue(float(b_deg[2]))
+        self.spin_ang3.setPrefix("γ (Z): ")
+
+        bore_layout.addWidget(self.spin_ang1)
+        bore_layout.addWidget(self.spin_ang2)
+        bore_layout.addWidget(self.spin_ang3)
+        bore_vbox.addLayout(bore_layout)
+        layout.addWidget(group_bore)
+
+        layout.addSpacing(4)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        self.btn_apply = QPushButton("Aplicar Cambios")
+        self.btn_apply.clicked.connect(self.accept)
+        self.btn_cancel = QPushButton("Cancelar")
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_layout.addWidget(self.btn_apply)
+        btn_layout.addWidget(self.btn_cancel)
+        layout.addLayout(btn_layout)
+
+    def _on_convention_changed(self, idx: int):
+        v1 = self.spin_ang1.value()
+        v2 = self.spin_ang2.value()
+        v3 = self.spin_ang3.value()
+
+        # Conversión exacta: Roll = -alpha, Pitch = -beta, Yaw = -gamma
+        new_v1 = -v1
+        new_v2 = -v2
+        new_v3 = -v3
+        if new_v3 < -180.0:
+            new_v3 += 360.0
+        elif new_v3 > 180.0:
+            new_v3 -= 360.0
+
+        self.spin_ang1.blockSignals(True)
+        self.spin_ang2.blockSignals(True)
+        self.spin_ang3.blockSignals(True)
+
+        self.spin_ang1.setValue(round(new_v1, 4))
+        self.spin_ang2.setValue(round(new_v2, 4))
+        self.spin_ang3.setValue(round(new_v3, 4))
+
+        if idx == 0:
+            self.spin_ang1.setPrefix("α (X): ")
+            self.spin_ang2.setPrefix("β (Y): ")
+            self.spin_ang3.setPrefix("γ (Z): ")
+        else:
+            self.spin_ang1.setPrefix("Roll: ")
+            self.spin_ang2.setPrefix("Pitch: ")
+            self.spin_ang3.setPrefix("Yaw: ")
+
+        self.spin_ang1.blockSignals(False)
+        self.spin_ang2.blockSignals(False)
+        self.spin_ang3.blockSignals(False)
+
+    def apply_changes(self):
+        self.sensor.name = self.input_name.text().strip() or self.sensor.name
+        stype_str = self.combo_type.currentText()
+        self.sensor.sensor_type = getattr(SensorType, stype_str, SensorType.OTHER)
+        self.sensor.lever_arm_b = np.array(
+            [self.spin_arm_x.value(), self.spin_arm_y.value(), self.spin_arm_z.value()],
+            dtype=np.float64
+        )
+        if self.combo_convention.currentIndex() == 1:
+            # En pantalla está Roll, Pitch, Yaw -> convertir a alpha, beta, gamma
+            r = self.spin_ang1.value()
+            p = self.spin_ang2.value()
+            y = self.spin_ang3.value()
+            self.sensor.set_boresight_from_rpy(r, p, y)
+        else:
+            self.sensor.boresight_deg = (
+                self.spin_ang1.value(),
+                self.spin_ang2.value(),
+                self.spin_ang3.value()
+            )
+
 
 
 class DialogChassisActions(BaseDialog):

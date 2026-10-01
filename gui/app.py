@@ -34,7 +34,8 @@ from gui.panel_report import ReportViewerWidget
 from gui.panel_kinematics import KinematicsWidget
 from gui.dialogs import (
     DialogNewProject, DialogProjectProperties, DialogCreatePlatform,
-    DialogAddSensor, DialogChassisActions, DialogDiagnostics
+    DialogPlatformProperties, DialogAddSensor, DialogSensorProperties,
+    DialogChassisActions, DialogDiagnostics
 )
 from gui.dialogs_tools import (
     ToolDialogMoveChassis, ToolDialogRotateChassis, ToolDialogScaleChassis,
@@ -59,6 +60,7 @@ class PyGSNMainWindow(QMainWindow):
         self.editing_target_type: Optional[str] = None  # None | "PLATFORM" | "SENSOR"
         self.editing_platform_id: Optional[str] = None
         self.editing_sensor_code: Optional[str] = None
+        self.selected_sensor_code: Optional[str] = None
         self._edit_initial_snapshot: Optional[dict] = None
         self._undo_stack: List[dict] = []
         self.is_dirty: bool = False
@@ -119,10 +121,19 @@ class PyGSNMainWindow(QMainWindow):
             parent=self
         )
         self.hierarchy_dock.platform_activated.connect(self.open_platform_tab)
-        # Nota: Clic en chasis activa la plataforma directamente sin ventana modal emergente
         self.hierarchy_dock.center_origin_requested.connect(self.center_platform_origin)
         self.hierarchy_dock.center_centroid_requested.connect(self.center_platform_centroid)
         self.hierarchy_dock.add_sensor_requested.connect(self.show_add_sensor_dialog)
+        self.hierarchy_dock.import_sensors_requested.connect(self.action_import_sensors_file)
+        self.hierarchy_dock.platform_properties_requested.connect(self.show_platform_properties_dialog)
+        self.hierarchy_dock.delete_platform_requested.connect(self.delete_platform)
+        self.hierarchy_dock.chassis_edit_requested.connect(self.start_chassis_edit)
+        self.hierarchy_dock.chassis_clear_requested.connect(self.clear_chassis)
+        self.hierarchy_dock.sensor_edit_requested.connect(self.start_sensor_edit)
+        self.hierarchy_dock.sensor_selected.connect(lambda pid, code: self.select_sensor(pid, code))
+        self.hierarchy_dock.sensor_zoom_requested.connect(self.zoom_to_sensor)
+        self.hierarchy_dock.sensor_properties_requested.connect(self.show_sensor_properties_dialog)
+        self.hierarchy_dock.delete_sensor_requested.connect(self.delete_sensor)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.hierarchy_dock)
 
         # Dock Derecho: Consola CLI (oculta por defecto)
@@ -165,7 +176,7 @@ class PyGSNMainWindow(QMainWindow):
         )
         menu_plat.addSeparator()
         self.action_menu_add_sens = menu_plat.addAction(
-            "Añadir Sensor al Rig...",
+            "Añadir sensor...",
             lambda: self.show_add_sensor_dialog(self.project.active_platform_id) if self.project.active_platform_id else None
         )
         menu_plat.addSeparator()
@@ -586,16 +597,21 @@ class PyGSNMainWindow(QMainWindow):
     def _show_sensor_move_dialog(self):
         if not self.editing_sensor_code or not self.editing_platform_id:
             return
+        plat = self.project.get_platform(self.editing_platform_id)
+        sens = plat.sensors.get(self.editing_sensor_code) if plat else None
+        sens_name = sens.name if (sens and sens.name) else self.editing_sensor_code
+
         if self.tool_dlg_sens_rot:
             self.tool_dlg_sens_rot.hide()
         if not self.tool_dlg_sens_move:
             self.tool_dlg_sens_move = ToolDialogSensorMove(
                 sensor_code=self.editing_sensor_code,
                 on_apply=self._apply_sensor_move,
+                sensor_name=sens_name,
                 parent=self
             )
         else:
-            self.tool_dlg_sens_move.setWindowTitle(f"Mover Sensor {self.editing_sensor_code} - PyGSN")
+            self.tool_dlg_sens_move.setWindowTitle(f"Mover Sensor {sens_name} - PyGSN")
         self._position_tool_dialog(self.tool_dlg_sens_move)
         self.tool_dlg_sens_move.show()
         self.tool_dlg_sens_move.raise_()
@@ -618,21 +634,26 @@ class PyGSNMainWindow(QMainWindow):
         if self.editing_platform_id in self.platform_canvases:
             self.platform_canvases[self.editing_platform_id].redraw_all()
         self.hierarchy_dock.rebuild_tree()
-        self.lbl_status_state.setText(f"[Sensor] Lever-arm de {sens.code} desplazado ({sens.lever_arm_b[0]:.3f}, {sens.lever_arm_b[1]:.3f}, {sens.lever_arm_b[2]:.3f})m")
+        self.lbl_status_state.setText(f"[Sensor] Lever-arm de '{sens.name}' desplazado ({sens.lever_arm_b[0]:.3f}, {sens.lever_arm_b[1]:.3f}, {sens.lever_arm_b[2]:.3f})m")
 
     def _show_sensor_rot_dialog(self):
         if not self.editing_sensor_code or not self.editing_platform_id:
             return
+        plat = self.project.get_platform(self.editing_platform_id)
+        sens = plat.sensors.get(self.editing_sensor_code) if plat else None
+        sens_name = sens.name if (sens and sens.name) else self.editing_sensor_code
+
         if self.tool_dlg_sens_move:
             self.tool_dlg_sens_move.hide()
         if not self.tool_dlg_sens_rot:
             self.tool_dlg_sens_rot = ToolDialogSensorRotate(
                 sensor_code=self.editing_sensor_code,
                 on_apply=self._apply_sensor_rotate,
+                sensor_name=sens_name,
                 parent=self
             )
         else:
-            self.tool_dlg_sens_rot.setWindowTitle(f"Rotar Boresight {self.editing_sensor_code} - PyGSN")
+            self.tool_dlg_sens_rot.setWindowTitle(f"Rotar Boresight {sens_name} - PyGSN")
         self._position_tool_dialog(self.tool_dlg_sens_rot)
         self.tool_dlg_sens_rot.show()
         self.tool_dlg_sens_rot.raise_()
@@ -655,7 +676,7 @@ class PyGSNMainWindow(QMainWindow):
         if self.editing_platform_id in self.platform_canvases:
             self.platform_canvases[self.editing_platform_id].redraw_all()
         self.hierarchy_dock.rebuild_tree()
-        self.lbl_status_state.setText(f"[Sensor] Boresight de {sens.code} rotado ({sens.boresight_deg[0]:.1f}°, {sens.boresight_deg[1]:.1f}°, {sens.boresight_deg[2]:.1f}°)")
+        self.lbl_status_state.setText(f"[Sensor] Boresight de '{sens.name}' rotado ({sens.boresight_deg[0]:.1f}°, {sens.boresight_deg[1]:.1f}°, {sens.boresight_deg[2]:.1f}°)")
 
     def action_undo(self):
         """Revierte la última operación en la plataforma o sensor bajo edición."""
@@ -817,9 +838,10 @@ class PyGSNMainWindow(QMainWindow):
                 self.btn_sens_edit.blockSignals(False)
                 return
 
-            selected_code = self.hierarchy_dock.get_selected_sensor_code()
+            selected_code = self.selected_sensor_code or self.hierarchy_dock.get_selected_sensor_code()
             if not selected_code or selected_code not in plat.sensors:
                 selected_code = list(plat.sensors.keys())[0]
+            self.selected_sensor_code = selected_code
 
             self.open_platform_tab(plat_id)
 
@@ -848,13 +870,19 @@ class PyGSNMainWindow(QMainWindow):
                 self.platform_canvases[plat_id].set_editing_sensor(selected_code)
 
             self.hierarchy_dock.set_editing_context(plat_id, selected_code)
-            self.lbl_status_state.setText(f"[Modo Edición Sensor ACTIVO: {selected_code} en {plat.name}]")
+            sens = plat.sensors.get(selected_code) if (plat and selected_code) else None
+            sens_name = sens.name if (sens and sens.name) else selected_code
+            self.lbl_status_state.setText(f"[Modo Edición Sensor ACTIVO: {sens_name} en {plat.name}]")
 
         else:
+            plat = self.project.get_platform(self.editing_platform_id) if self.editing_platform_id else None
+            sens = plat.sensors.get(self.editing_sensor_code) if (plat and self.editing_sensor_code) else None
+            sens_name = sens.name if (sens and sens.name) else (self.editing_sensor_code or "Sensor")
+
             if self.is_dirty:
                 msg_box = QMessageBox(self)
                 msg_box.setWindowTitle("Guardar Cambios de Sensor - PyGSN")
-                msg_box.setText(f"Ha realizado modificaciones en el sensor '{self.editing_sensor_code}'.\n¿Desea guardar o descartar los cambios?")
+                msg_box.setText(f"Ha realizado modificaciones en el sensor '{sens_name}'.\n¿Desea guardar o descartar los cambios?")
                 set_window_titlebar_light(msg_box)
                 btn_save = msg_box.addButton("Guardar Cambios", QMessageBox.AcceptRole)
                 btn_discard = msg_box.addButton("Descartar Cambios", QMessageBox.DestructiveRole)
@@ -875,9 +903,9 @@ class PyGSNMainWindow(QMainWindow):
                         if self.editing_platform_id in self.platform_canvases:
                             self.platform_canvases[self.editing_platform_id].platform = restored
                             self.platform_canvases[self.editing_platform_id].redraw_all()
-                        self.lbl_status_state.setText(f"[Descarte] Modificaciones del sensor '{self.editing_sensor_code}' descartadas.")
+                        self.lbl_status_state.setText(f"[Descarte] Modificaciones del sensor '{sens_name}' descartadas.")
                 else:
-                    self.lbl_status_state.setText(f"[Guardado] Cambios del sensor '{self.editing_sensor_code}' guardados.")
+                    self.lbl_status_state.setText(f"[Guardado] Cambios del sensor '{sens_name}' guardados.")
 
             self._close_all_tool_dialogs()
             self._disable_all_sensor_tools()
@@ -1027,6 +1055,7 @@ class PyGSNMainWindow(QMainWindow):
         widget.chassis_updated.connect(lambda pid=plat_id: self._on_canvas_chassis_updated(pid))
         widget.sensor_placed.connect(lambda code, x, y, z, pid=plat_id: self._on_canvas_sensor_placed(pid, code, x, y, z))
         widget.sensor_moved.connect(lambda code, x, y, z, pid=plat_id: self._on_canvas_sensor_moved(pid, code, x, y, z))
+        widget.sensor_selected.connect(lambda code, pid=plat_id: self.select_sensor(pid, code))
         widget.view_changed.connect(lambda v, pid=plat_id: self._on_canvas_view_changed(pid, v))
         self.platform_canvases[plat_id] = widget
         idx = self.workspace.addTab(widget, tab_title)
@@ -1129,12 +1158,243 @@ class PyGSNMainWindow(QMainWindow):
         plat = self.project.get_platform(plat_id)
         if not plat:
             return
-        dlg = DialogAddSensor(plat.name, self)
+        dlg = DialogAddSensor(plat, self)
         if dlg.exec():
             sens = dlg.get_sensor()
             plat.add_sensor(sens)
+            self.is_dirty = True
+            if plat_id in self.platform_canvases:
+                self.platform_canvases[plat_id].redraw_all()
             self.on_project_changed()
             self.lbl_status_state.setText(f"[OK] Sensor {sens.code} añadido a {plat.name}")
+
+    def action_import_sensors_file(self, plat_id: Optional[str] = None):
+        if self.editing_target_type is not None:
+            QMessageBox.warning(
+                self, "Acción Bloqueada",
+                "No se pueden importar sensores mientras una sesión de edición está activa.\n"
+                "Finalice o descarte la edición primero."
+            )
+            return
+        if not plat_id:
+            plat_id = self.project.active_platform_id
+        if not plat_id:
+            QMessageBox.warning(self, "Aviso", "Primero debe crear o seleccionar una plataforma.")
+            return
+        plat = self.project.get_platform(plat_id)
+        if not plat:
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            f"Importar Sensores para '{plat.name}' - PyGSN",
+            "",
+            "Archivos de texto (*.txt *.dat *.csv);;Todos los archivos (*.*)"
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            with open(file_path, "r", encoding="latin-1") as f:
+                content = f.read()
+        except Exception as e:
+            QMessageBox.critical(self, "Error de Lectura", f"No se pudo leer el archivo:\n{e}")
+            return
+
+        self._undo_stack.append(plat.to_dict())
+        imported = plat.import_sensors_from_txt(content)
+        if imported:
+            self.is_dirty = True
+            if plat_id in self.platform_canvases:
+                self.platform_canvases[plat_id].redraw_all()
+            self.on_project_changed()
+            self.lbl_status_state.setText(f"[Importación] {len(imported)} sensores importados con éxito en '{plat.name}'.")
+        else:
+            QMessageBox.warning(
+                self, "Aviso de Importación",
+                "No se encontraron líneas de sensores válidas en el archivo seleccionado.\n"
+                "Verifique el formato (ej. 'Sensor x1_m x2_m x3_m alpha_deg beta_deg gamma_deg')."
+            )
+
+    def show_platform_properties_dialog(self, plat_id: str):
+        plat = self.project.get_platform(plat_id)
+        if not plat:
+            return
+        dlg = DialogPlatformProperties(plat, self)
+        if dlg.exec():
+            dlg.apply_changes()
+            self.is_dirty = True
+            for i in range(self.workspace.count()):
+                w = self.workspace.widget(i)
+                if isinstance(w, OrthoCADWidget) and w.platform and w.platform.id == plat_id:
+                    self.workspace.setTabText(i, f"Plataforma: {plat.name}")
+                    w.lbl_info.setText(f"Plataforma: {plat.name} [{plat.platform_type}]")
+            if plat_id in self.platform_canvases:
+                self.platform_canvases[plat_id].redraw_all()
+            self.on_project_changed()
+            self.lbl_status_state.setText(f"[OK] Propiedades de '{plat.name}' actualizadas.")
+
+    def delete_platform(self, plat_id: str):
+        plat = self.project.get_platform(plat_id)
+        if not plat:
+            return
+        if self.editing_target_type is not None and self.editing_platform_id == plat_id:
+            QMessageBox.warning(
+                self, "Acción Bloqueada",
+                "No se puede eliminar la plataforma mientras está en modo edición.\n"
+                "Finalice o descarte la edición primero."
+            )
+            return
+
+        res = QMessageBox.question(
+            self, "Confirmar Eliminación",
+            f"¿Está seguro de eliminar la plataforma '{plat.name}' y todos sus sensores asociados?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if res == QMessageBox.Yes:
+            tab_to_close = -1
+            for i in range(self.workspace.count()):
+                w = self.workspace.widget(i)
+                if isinstance(w, OrthoCADWidget) and w.platform and w.platform.id == plat_id:
+                    tab_to_close = i
+                    break
+            if tab_to_close >= 0:
+                self.workspace.removeTab(tab_to_close)
+
+            if plat_id in self.platform_canvases:
+                del self.platform_canvases[plat_id]
+
+            self.project.remove_platform(plat_id)
+            self.is_dirty = True
+            self.on_project_changed()
+            self.lbl_status_state.setText(f"[OK] Plataforma '{plat.name}' eliminada.")
+
+    def start_chassis_edit(self, plat_id: str):
+        plat = self.project.get_platform(plat_id)
+        if not plat:
+            return
+        self.open_platform_tab(plat_id)
+        if self.editing_target_type == "PLATFORM" and self.editing_platform_id == plat_id:
+            return
+        if not self.btn_plat_edit.isChecked():
+            self.btn_plat_edit.setChecked(True)
+
+    def start_sensor_edit(self, plat_id: str, sensor_code: str):
+        plat = self.project.get_platform(plat_id)
+        if not plat or sensor_code not in plat.sensors:
+            return
+        self.open_platform_tab(plat_id)
+        self.selected_sensor_code = sensor_code
+        self.hierarchy_dock.select_sensor_item(sensor_code)
+        if plat_id in self.platform_canvases:
+            self.platform_canvases[plat_id].set_selected_sensor(sensor_code)
+
+        if self.editing_target_type == "SENSOR" and self.editing_platform_id == plat_id:
+            if self.editing_sensor_code != sensor_code:
+                self.editing_sensor_code = sensor_code
+                if plat_id in self.platform_canvases:
+                    self.platform_canvases[plat_id].set_editing_sensor(sensor_code)
+                self.hierarchy_dock.set_editing_context(plat_id, sensor_code)
+                sens = plat.sensors[sensor_code]
+                self.lbl_status_state.setText(f"[Modo Edición Sensor ACTIVO: {sens.name} ({sensor_code})]")
+            return
+
+        self.hierarchy_dock.editing_sensor_code = sensor_code
+        if not self.btn_sens_edit.isChecked():
+            self.btn_sens_edit.setChecked(True)
+
+    def zoom_to_sensor(self, plat_id: str, sensor_code: str):
+        plat = self.project.get_platform(plat_id)
+        if not plat or sensor_code not in plat.sensors:
+            return
+        self.open_platform_tab(plat_id)
+        widget = self.platform_canvases.get(plat_id)
+        if widget:
+            widget.zoom_to_sensor(sensor_code)
+            self.lbl_status_state.setText(f"[Zoom] Sensor '{sensor_code}' enfocado.")
+
+    def show_sensor_properties_dialog(self, plat_id: str, sensor_code: str):
+        plat = self.project.get_platform(plat_id)
+        if not plat or sensor_code not in plat.sensors:
+            return
+        sensor = plat.sensors[sensor_code]
+        dlg = DialogSensorProperties(sensor, plat.name, self)
+        if dlg.exec():
+            dlg.apply_changes()
+            self.is_dirty = True
+            if plat_id in self.platform_canvases:
+                self.platform_canvases[plat_id].redraw_all()
+            self.on_project_changed()
+            self.lbl_status_state.setText(f"[OK] Propiedades del sensor '{sensor.code}' actualizadas.")
+
+    def delete_sensor(self, plat_id: str, sensor_code: str):
+        plat = self.project.get_platform(plat_id)
+        if not plat or sensor_code not in plat.sensors:
+            return
+        if self.editing_target_type == "SENSOR" and self.editing_sensor_code == sensor_code:
+            QMessageBox.warning(
+                self, "Acción Bloqueada",
+                "No se puede eliminar el sensor mientras está en modo edición."
+            )
+            return
+
+        res = QMessageBox.question(
+            self, "Confirmar Eliminación",
+            f"¿Está seguro de eliminar el sensor '{sensor_code}' de '{plat.name}'?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if res == QMessageBox.Yes:
+            plat.remove_sensor(sensor_code)
+            if self.selected_sensor_code == sensor_code:
+                self.selected_sensor_code = None
+            self.is_dirty = True
+            if plat_id in self.platform_canvases:
+                self.platform_canvases[plat_id].redraw_all()
+            self.on_project_changed()
+            self.lbl_status_state.setText(f"[OK] Sensor '{sensor_code}' eliminado.")
+
+    def select_sensor(self, plat_id: str, sensor_code: str):
+        """Sincroniza la selección de un sensor entre el lienzo CAD, el árbol de capas y el modo de edición."""
+        plat = self.project.get_platform(plat_id)
+        if not plat or sensor_code not in plat.sensors:
+            return
+        self.selected_sensor_code = sensor_code
+        self.hierarchy_dock.select_sensor_item(sensor_code)
+        if plat_id in self.platform_canvases:
+            self.platform_canvases[plat_id].set_selected_sensor(sensor_code)
+
+        # Si ya estamos en sesión de edición de sensor de esta plataforma, cambiar el sensor activo en edición
+        if self.editing_target_type == "SENSOR" and self.editing_platform_id == plat_id:
+            if self.editing_sensor_code != sensor_code:
+                self.editing_sensor_code = sensor_code
+                if plat_id in self.platform_canvases:
+                    self.platform_canvases[plat_id].set_editing_sensor(sensor_code)
+                self.hierarchy_dock.set_editing_context(plat_id, sensor_code)
+                sens = plat.sensors[sensor_code]
+                self.lbl_status_state.setText(f"[Modo Edición Sensor ACTIVO: {sens.name} ({sensor_code})]")
+
+    def clear_chassis(self, plat_id: str):
+        """Restablece el chasis a estado libre sin dimensiones ni geometría poligonal."""
+        plat = self.project.get_platform(plat_id)
+        if not plat:
+            return
+        res = QMessageBox.question(
+            self, "Confirmar Limpieza de Chasis",
+            f"¿Está seguro de limpiar y dejar libre el chasis de la plataforma '{plat.name}'?\n"
+            "Se eliminarán las dimensiones fijadas y la geometría poligonal existente.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if res == QMessageBox.Yes:
+            plat.clear_chassis()
+            self.is_dirty = True
+            if plat_id in self.platform_canvases:
+                self.platform_canvases[plat_id].redraw_all()
+            self.hierarchy_dock.rebuild_tree()
+            self.on_project_changed()
+            self.lbl_status_state.setText(f"[OK] Chasis de '{plat.name}' restablecido a libre.")
 
     def open_solver_tab(self):
         plat = self.project.platform
@@ -1232,34 +1492,41 @@ class PyGSNMainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error al Cargar", f"No se pudo cargar el proyecto: {str(e)}")
 
-    def action_save_project(self):
+    def action_save_project(self) -> bool:
         if self.current_project_file:
             try:
                 self.project.save(self.current_project_file)
+                self.is_dirty = False
                 self.lbl_status_state.setText(f"[OK] Guardado en: {self.current_project_file.name}")
+                return True
             except Exception as e:
                 QMessageBox.critical(self, "Error al Guardar", f"No se pudo guardar el archivo: {str(e)}")
+                return False
         else:
-            self.action_save_project_as()
+            return self.action_save_project_as()
 
-    def action_save_project_as(self):
+    def action_save_project_as(self) -> bool:
         fpath, _ = QFileDialog.getSaveFileName(
             self, "Guardar Proyecto Como...", "data/proyecto.pygsn", "Proyecto PyGSN (*.pygsn)"
         )
         if not fpath:
-            return
+            return False
         p = Path(fpath)
         try:
             self.project.save(p)
             self.current_project_file = p
+            self.is_dirty = False
             self.lbl_status_state.setText(f"[OK] Guardado en: {p.name}")
+            return True
         except Exception as e:
             QMessageBox.critical(self, "Error al Guardar", f"No se pudo guardar el archivo: {str(e)}")
+            return False
 
     def action_project_properties(self):
         dlg = DialogProjectProperties(self.project, self)
         if dlg.exec():
             dlg.apply_to_project()
+            self.is_dirty = True
             self.update_ui_state()
 
     def action_create_platform(self):
@@ -1270,13 +1537,15 @@ class PyGSNMainWindow(QMainWindow):
                 "Guarde o descarte la edición antes de crear otra plataforma."
             )
             return
-        dlg = DialogCreatePlatform(len(self.project.platforms), self)
+        existing_ids = list(self.project.platforms.keys())
+        dlg = DialogCreatePlatform(existing_ids=existing_ids, existing_count=len(self.project.platforms), parent=self)
         if dlg.exec():
             plat = dlg.get_platform()
             self.project.add_platform(plat, set_active=True)
+            self.is_dirty = True
             self.on_project_changed()
             self.open_platform_tab(plat.id)
-            self.lbl_status_state.setText(f"[OK] Plataforma '{plat.name}' creada.")
+            self.lbl_status_state.setText(f"[OK] Plataforma '{plat.name}' ({plat.id}) creada.")
 
     def action_import_calibration(self):
         fpath, _ = QFileDialog.getOpenFileName(
@@ -1349,6 +1618,34 @@ class PyGSNMainWindow(QMainWindow):
             "Arquitectura de Ingeniería en PySide6 (Qt) con computación NumPy/SciPy float64.\n\n"
             "Licencia: GNU General Public License v3 (GPLv3)"
         )
+
+    def closeEvent(self, event):
+        """Gestiona el cierre ordenado de la aplicación preguntando si hay cambios pendientes."""
+        if self.is_dirty:
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Cierre del Programa - PyGSN")
+            msg_box.setText("Existen modificaciones sin guardar en el proyecto actual.\n¿Desea guardar los cambios antes de salir?")
+            set_window_titlebar_light(msg_box)
+            btn_save = msg_box.addButton("Guardar", QMessageBox.AcceptRole)
+            btn_discard = msg_box.addButton("Salir sin guardar", QMessageBox.DestructiveRole)
+            btn_cancel = msg_box.addButton("Cancelar", QMessageBox.RejectRole)
+            msg_box.setDefaultButton(btn_save)
+            msg_box.exec()
+            clicked = msg_box.clickedButton()
+
+            if clicked == btn_save:
+                saved = self.action_save_project()
+                if saved:
+                    event.accept()
+                else:
+                    event.ignore()
+            elif clicked == btn_discard:
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
+
 
 
 class PyGSNApp:

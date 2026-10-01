@@ -60,6 +60,57 @@ class Sensor:
             attitude_obs_deg=tuple(data["attitude_obs_deg"]) if data.get("attitude_obs_deg") else None,
         )
 
+    def get_boresight_alpha_beta_gamma(self) -> tuple[float, float, float]:
+        """Devuelve los ángulos de desalineamiento de calibración (alpha, beta, gamma) en grados."""
+        return (float(self.boresight_deg[0]), float(self.boresight_deg[1]), float(self.boresight_deg[2]))
+
+    def get_boresight_rpy(self) -> tuple[float, float, float]:
+        """
+        Devuelve la orientación del sensor respecto a la plataforma bajo convención de actitud (Roll, Pitch, Yaw) en grados.
+        Relación exacta: Roll = -alpha, Pitch = -beta, Yaw = -gamma.
+        """
+        a, b, c = self.get_boresight_alpha_beta_gamma()
+        r = -a
+        p = -b
+        y = -c
+        if y < -180.0:
+            y += 360.0
+        elif y > 180.0:
+            y -= 360.0
+        return (round(r, 6), round(p, 6), round(y, 6))
+
+    def set_boresight_from_rpy(self, roll_deg: float, pitch_deg: float, yaw_deg: float) -> None:
+        """
+        Fija los ángulos de boresight a partir de la actitud (Roll, Pitch, Yaw) en grados.
+        Convierte a la representación canónica (alpha, beta, gamma): alpha = -Roll, beta = -Pitch, gamma = -Yaw.
+        """
+        a = -roll_deg
+        b = -pitch_deg
+        c = -yaw_deg
+        if c < -180.0:
+            c += 360.0
+        elif c > 180.0:
+            c -= 360.0
+        self.boresight_deg = (round(a, 6), round(b, 6), round(c, 6))
+
+
+def infer_sensor_type_from_code(code: str) -> SensorType:
+    """Infiere el tipo de sensor a partir del código o prefijo estándar."""
+    c = code.upper()
+    if c.startswith("REC") or "GNSS" in c or "GPS" in c:
+        return SensorType.GNSS
+    elif "INS" in c or "IMU" in c:
+        return SensorType.INS
+    elif c.startswith("CAM"):
+        return SensorType.CAMERA
+    elif "LIDAR" in c:
+        return SensorType.LIDAR
+    elif "ODO" in c:
+        return SensorType.ODOMETER
+    elif c in ("PLA", "ORIGEN", "CHASIS", "BODY"):
+        return SensorType.PLATFORM_ORIGIN
+    return SensorType.OTHER
+
 
 class PlatformType(str, Enum):
     GENERIC = "GENERIC"
@@ -200,6 +251,15 @@ class Platform:
         self.translate(-cx, -cy, -cz)
         self.chassis_center_b = [0.0, 0.0, 0.0]
         return (-cx, -cy, -cz)
+
+    def clear_chassis(self) -> None:
+        """Restablece el chasis a estado libre sin dimensiones fijadas ni geometría poligonal."""
+        self.has_dimensions = False
+        self.length_m = 0.0
+        self.width_m = 0.0
+        self.height_m = 0.0
+        self.chassis_polygon = None
+        self.chassis_center_b = [0.0, 0.0, 0.0]
 
     def rotate_plane(self, angle_deg: float, plane: str = "S") -> None:
         """
@@ -348,16 +408,18 @@ class Platform:
             lines.append(f"{code:<8s} {t_str:<12s} {x1:10.4f} {x2:10.4f} {x3:10.4f}  {a:11.6f} {b:11.6f} {c:11.6f}  {name_clean}")
         return "\n".join(lines) + "\n"
 
-    @classmethod
-    def from_txt(cls, txt_content: str) -> "Platform":
+    def import_sensors_from_txt(self, txt_content: str) -> list[Sensor]:
         """
-        Carga una plataforma y sus sensores desde un archivo de texto .txt.
-        Ignora lineas de comentarios (#) y lineas vacias.
+        Importa sensores a partir del contenido de un archivo de texto.
+        Soporta formato de 7 columnas (code, x1, x2, x3, alpha, beta, gamma) como 'sensores.txt'
+        y formato de 8+ columnas (code, tipo, x1, x2, x3, alpha, beta, gamma, [nombre]).
+        Retorna la lista de sensores importados.
         """
-        plat = cls(name="Plataforma desde TXT")
+        imported: list[Sensor] = []
         type_map = {
             "PLATAFORMA": SensorType.PLATFORM_ORIGIN,
             "ORIGEN": SensorType.PLATFORM_ORIGIN,
+            "PLA": SensorType.PLATFORM_ORIGIN,
             "CHASIS": SensorType.PLATFORM_ORIGIN,
             "BODY": SensorType.PLATFORM_ORIGIN,
             "INERCIAL": SensorType.INS,
@@ -378,10 +440,71 @@ class Platform:
 
         for line in txt_content.splitlines():
             line = line.strip()
-            if not line:
+            if not line or line.startswith("#"):
                 continue
 
-            # Parsear metadatos de comentarios
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+
+            code = parts[0].upper()
+            if code.lower() in ("sensor", "id", "code", "nombre"):
+                continue
+
+            # Detectar si la segunda columna es numérica (formato de 7 columnas) o texto (tipo)
+            try:
+                float(parts[1])
+                is_numeric_second = True
+            except ValueError:
+                is_numeric_second = False
+
+            try:
+                if is_numeric_second:
+                    # Formato sensores.txt: code, x1, x2, x3, [alpha, beta, gamma, [name]]
+                    x1 = float(parts[1])
+                    x2 = float(parts[2])
+                    x3 = float(parts[3])
+                    alpha = float(parts[4]) if len(parts) > 4 else 0.0
+                    beta = float(parts[5]) if len(parts) > 5 else 0.0
+                    gamma = float(parts[6]) if len(parts) > 6 else 0.0
+                    name = parts[7].replace("_", " ") if len(parts) > 7 else code
+                    stype = infer_sensor_type_from_code(code)
+                else:
+                    # Formato extendido: code, tipo, x1, x2, x3, [alpha, beta, gamma, [name]]
+                    tipo_raw = parts[1].upper()
+                    stype = type_map.get(tipo_raw, infer_sensor_type_from_code(code))
+                    x1 = float(parts[2])
+                    x2 = float(parts[3])
+                    x3 = float(parts[4])
+                    alpha = float(parts[5]) if len(parts) > 5 else 0.0
+                    beta = float(parts[6]) if len(parts) > 6 else 0.0
+                    gamma = float(parts[7]) if len(parts) > 7 else 0.0
+                    name = parts[8].replace("_", " ") if len(parts) > 8 else code
+
+                arm = np.array([x1, x2, x3], dtype=np.float64)
+                sens = Sensor(
+                    code=code,
+                    name=name,
+                    sensor_type=stype,
+                    lever_arm_b=arm,
+                    boresight_deg=(alpha, beta, gamma)
+                )
+                self.add_sensor(sens)
+                imported.append(sens)
+            except ValueError:
+                continue
+
+        return imported
+
+    @classmethod
+    def from_txt(cls, txt_content: str) -> "Platform":
+        """
+        Carga una plataforma y sus sensores desde un archivo de texto .txt.
+        Ignora lineas de comentarios (#) y lineas vacias.
+        """
+        plat = cls(name="Plataforma desde TXT")
+        for line in txt_content.splitlines():
+            line = line.strip()
             if line.startswith("#"):
                 upper = line.upper()
                 if "PLATAFORMA:" in upper:
@@ -398,47 +521,6 @@ class Platform:
                             plat.length_m, plat.width_m, plat.height_m = vals[0], vals[1], vals[2]
                     except Exception:
                         pass
-                continue
-
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-
-            # Formato esperado:
-            # 1: code
-            # 2: tipo
-            # 3, 4, 5: x1, x2, x3
-            # 6, 7, 8: alpha, beta, gamma (opcional)
-            # 9: nombre (opcional)
-            code = parts[0].upper()
-            tipo_raw = parts[1].upper()
-            stype = type_map.get(tipo_raw, SensorType.OTHER)
-
-            try:
-                x1 = float(parts[2])
-                x2 = float(parts[3])
-                x3 = float(parts[4])
-                arm = np.array([x1, x2, x3], dtype=np.float64)
-
-                alpha, beta, gamma = 0.0, 0.0, 0.0
-                name = code
-                if len(parts) >= 8:
-                    alpha = float(parts[5])
-                    beta = float(parts[6])
-                    gamma = float(parts[7])
-                if len(parts) >= 9:
-                    name = parts[8].replace("_", " ")
-
-                plat.add_sensor(Sensor(
-                    code=code,
-                    name=name,
-                    sensor_type=stype,
-                    lever_arm_b=arm,
-                    boresight_deg=(alpha, beta, gamma)
-                ))
-            except ValueError:
-                # Linea de cabecera no comentada
-                continue
-
+        plat.import_sensors_from_txt(txt_content)
         return plat
 

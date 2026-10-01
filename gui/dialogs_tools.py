@@ -288,9 +288,13 @@ class ToolDialogSensorMove(BaseToolDialog):
         self,
         sensor_code: str,
         on_apply: Callable[[float, float, float], None],
+        sensor_name: Optional[str] = None,
         parent: Optional[QWidget] = None
     ):
-        super().__init__(f"Mover Sensor {sensor_code} - PyGSN", parent)
+        disp_name = sensor_name or sensor_code
+        super().__init__(f"Mover Sensor {disp_name} - PyGSN", parent)
+        self.sensor_code = sensor_code
+        self.sensor_name = disp_name
         self.on_apply = on_apply
         self.setFixedWidth(320)
 
@@ -298,7 +302,7 @@ class ToolDialogSensorMove(BaseToolDialog):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
 
-        lbl_desc = QLabel(f"Desplazamiento Lever-Arm en b-frame ({sensor_code}):")
+        lbl_desc = QLabel(f"Desplazamiento Lever-Arm en b-frame ({disp_name}):")
         lbl_desc.setStyleSheet("font-weight: bold; color: #b45309;")
         layout.addWidget(lbl_desc)
 
@@ -357,46 +361,67 @@ class ToolDialogSensorRotate(BaseToolDialog):
         self,
         sensor_code: str,
         on_apply: Callable[[float, float, float], None],
+        sensor_name: Optional[str] = None,
         parent: Optional[QWidget] = None
     ):
-        super().__init__(f"Rotar Boresight {sensor_code} - PyGSN", parent)
+        disp_name = sensor_name or sensor_code
+        super().__init__(f"Rotar Boresight {disp_name} - PyGSN", parent)
+        self.sensor_code = sensor_code
+        self.sensor_name = disp_name
         self.on_apply = on_apply
-        self.setFixedWidth(320)
+        self.setFixedWidth(330)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
 
-        lbl_desc = QLabel(f"Ajuste Angular Boresight Euler ({sensor_code}):")
+        lbl_desc = QLabel(f"Ajuste Angular Boresight ({disp_name}):")
         lbl_desc.setStyleSheet("font-weight: bold; color: #b45309;")
         layout.addWidget(lbl_desc)
+
+        conv_layout = QHBoxLayout()
+        conv_layout.setSpacing(6)
+        lbl_conv = QLabel("Convención:")
+        lbl_conv.setStyleSheet("color: #475569; font-weight: 500; font-size: 11px;")
+        self.combo_convention = QComboBox()
+        self.combo_convention.addItems([
+            "Calibración (Δα, Δβ, Δγ)",
+            "Actitud (ΔRoll, ΔPitch, ΔYaw)"
+        ])
+        self.combo_convention.currentIndexChanged.connect(self._on_convention_changed)
+        conv_layout.addWidget(lbl_conv)
+        conv_layout.addWidget(self.combo_convention, 1)
+        layout.addLayout(conv_layout)
 
         form = QFormLayout()
         form.setVerticalSpacing(6)
 
-        self.spin_roll = QDoubleSpinBox()
-        self.spin_roll.setButtonSymbols(QAbstractSpinBox.NoButtons)
-        self.spin_roll.setRange(-180.0, 180.0)
-        self.spin_roll.setDecimals(2)
-        self.spin_roll.setValue(0.0)
-        self.spin_roll.setSuffix(" °")
-        form.addRow("ΔRoll (Alabeo):", self.spin_roll)
+        self.spin_a1 = QDoubleSpinBox()
+        self.spin_a1.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_a1.setRange(-180.0, 180.0)
+        self.spin_a1.setDecimals(2)
+        self.spin_a1.setValue(0.0)
+        self.spin_a1.setSuffix(" °")
+        self.lbl_row1 = QLabel("Δα (Eje X):")
+        form.addRow(self.lbl_row1, self.spin_a1)
 
-        self.spin_pitch = QDoubleSpinBox()
-        self.spin_pitch.setButtonSymbols(QAbstractSpinBox.NoButtons)
-        self.spin_pitch.setRange(-180.0, 180.0)
-        self.spin_pitch.setDecimals(2)
-        self.spin_pitch.setValue(0.0)
-        self.spin_pitch.setSuffix(" °")
-        form.addRow("ΔPitch (Cabeceo):", self.spin_pitch)
+        self.spin_a2 = QDoubleSpinBox()
+        self.spin_a2.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_a2.setRange(-180.0, 180.0)
+        self.spin_a2.setDecimals(2)
+        self.spin_a2.setValue(0.0)
+        self.spin_a2.setSuffix(" °")
+        self.lbl_row2 = QLabel("Δβ (Eje Y):")
+        form.addRow(self.lbl_row2, self.spin_a2)
 
-        self.spin_yaw = QDoubleSpinBox()
-        self.spin_yaw.setButtonSymbols(QAbstractSpinBox.NoButtons)
-        self.spin_yaw.setRange(-180.0, 180.0)
-        self.spin_yaw.setDecimals(2)
-        self.spin_yaw.setValue(0.0)
-        self.spin_yaw.setSuffix(" °")
-        form.addRow("ΔYaw (Guiñada):", self.spin_yaw)
+        self.spin_a3 = QDoubleSpinBox()
+        self.spin_a3.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_a3.setRange(-180.0, 180.0)
+        self.spin_a3.setDecimals(2)
+        self.spin_a3.setValue(0.0)
+        self.spin_a3.setSuffix(" °")
+        self.lbl_row3 = QLabel("Δγ (Eje Z):")
+        form.addRow(self.lbl_row3, self.spin_a3)
         layout.addLayout(form)
 
         btn_apply = QPushButton("Aplicar a Boresight")
@@ -410,8 +435,27 @@ class ToolDialogSensorRotate(BaseToolDialog):
         btn_close.clicked.connect(self.hide)
         layout.addWidget(btn_close)
 
+    def _on_convention_changed(self, idx: int):
+        if idx == 0:
+            self.lbl_row1.setText("Δα (Eje X):")
+            self.lbl_row2.setText("Δβ (Eje Y):")
+            self.lbl_row3.setText("Δγ (Eje Z):")
+        else:
+            self.lbl_row1.setText("ΔRoll (Alabeo):")
+            self.lbl_row2.setText("ΔPitch (Cabeceo):")
+            self.lbl_row3.setText("ΔYaw (Guiñada):")
+
     def _do_apply(self):
-        r = self.spin_roll.value()
-        p = self.spin_pitch.value()
-        y = self.spin_yaw.value()
-        self.on_apply(r, p, y)
+        v1 = self.spin_a1.value()
+        v2 = self.spin_a2.value()
+        v3 = self.spin_a3.value()
+        if self.combo_convention.currentIndex() == 1:
+            # Entrada es Roll, Pitch, Yaw -> delta a (alpha, beta, gamma) es -delta(rpy)
+            da = -v1
+            db = -v2
+            dc = -v3
+        else:
+            da = v1
+            db = v2
+            dc = v3
+        self.on_apply(da, db, dc)

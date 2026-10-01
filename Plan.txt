@@ -229,3 +229,32 @@ Para garantizar estabilidad matemática, código limpio y evitar sobrecargar la 
   - Preasignación en memoria (`__init__`) de plumas (`QPen`) y fuentes (`QFont`) en el motor de renderizado `OrthoCADCanvas` para eliminar allocations por frame.
   - Estandarización ergonómica y visual de todos los diálogos y pop-ups.
   - Limpieza de `.agents/Temp/` y catalogación técnica exhaustiva en `.agents/utilities/README.md` y `.agents/AGENTS.md`.
+
+### Fase 7: Gestión Avanzada de Capas, Seguridad de Cierre y Montaje de Sensores (ESTADO: COMPLETADA)
+- **Cierre Seguro del Programa (A.B)**: Evento `closeEvent` con detección de cambios no guardados (`is_dirty`), presentando cuadro de diálogo con opciones `[Guardar, Salir sin guardar, Cancelar]`.
+- **Menús Contextuales en Árbol de Jerarquía (A.C, A.C.1, A.C.2)**:
+  - Plataforma: `[Abrir en Workspace, Centrar Vista al Origen [0, 0, 0], Centrar Vista al Centroide, Añadir sensor..., Propiedades..., Eliminar Plataforma]`.
+  - Propiedades de Plataforma (`DialogPlatformProperties`): Consulta y edición de metadatos (nombre, tipo, fija/móvil) con estado de chasis en solo lectura para salvaguardar estrictamente la geometría poligonal y dimensiones existentes del chasis.
+  - Chasis: `[Editar, Centrar al Origen [0, 0, 0], Centrar al Centroide, Limpiar]`. Acción "Limpiar" con diálogo de confirmación que restablece el chasis a estado libre (`Platform.clear_chassis()`).
+  - Grupo Sensores: `[Añadir...]`.
+  - Sensor: `[Editar, Hacer zoom, Propiedades..., Eliminar Sensor]`, con zoom automático a la posición 3D del sensor (`zoom_to_sensor`).
+  - Eliminación robusta de plataformas con cierre de pestañas en workspace y recálculo de plataforma activa en `Project.remove_platform`.
+- **Generación Automática de Identificadores (A.D)**:
+  - Eliminación de campos manuales de ID en modales de creación.
+  - Asignación interna y consistente de IDs técnicos (`PLAT_01`, `PLAT_02`, `GNSS_01`, `INS_01`, `CAM_01`, `LIDAR_01`, `ODO_01`, `SENS_01`).
+- **Restauración Visual de Desplegables (A.E)**:
+  - Inserción de flecha indicadora SVG (`arrow_down.svg`) en la sub-regla `QComboBox::down-arrow` del tema claro QSS con espaciado ergonómico.
+- **Suite de Montaje y Propiedades de Sensores (A.F)**:
+  - Diálogo "Añadir sensor" con ventana técnica compacta (470x305px) y sin textos redundantes.
+  - Palanca de brazo (Lever-Arm $[X_b, Y_b, Z_b]$) opcional con checkbox (inactiva en $[0, 0, 0]$ m por defecto para modelado gráfico posterior).
+  - Ángulos Boresight (Euler $s$-frame $\to$ $b$-frame) inicializados a $0^\circ, 0^\circ, 0^\circ$.
+  - Corrección de excepción en creación de sensor vinculando correctamente el argumento `boresight_deg`.
+  - Creación de diálogos dedicados para edición de propiedades: `DialogPlatformProperties` y `DialogSensorProperties`.
+- **Representación Desacoplada de Objetos y Formato Limpio (A.G)**:
+  - En Workspace CAD ortogonal, visualización del Nombre descriptivo (`s.name`) en lugar del código interno alfanumérico.
+  - En el panel de Capas, formato limpio y directo: `{s.name} [{TIPO}]` (p. ej. `REC2 [GNS]`).
+- **Arquitectura Integral de Selección y Edición de Sensores (A.H)**:
+  - Selección interactiva bidireccional en el lienzo CAD por clic directo (`_get_sensor_at_pos`, radio 12px) con señal `sensor_clicked` y halo visual técnico (cian translúcido, radio 8.5px).
+  - Sincronización automática con el árbol de jerarquía mediante `select_sensor_item` y `setCurrentItem`.
+  - Corrección del fallback forzado al primer sensor en `start_sensor_edit` y `_on_toggle_sensor_edit`.
+  - Capacidad de conmutar en caliente el sensor activo bajo edición al hacer clic sobre otro sensor en el lienzo o en el panel de capas.
