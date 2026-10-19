@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit,
     QLineEdit, QPushButton, QLabel
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QLocale
 from PySide6.QtGui import QFont, QTextCursor
 
 from core.models import Platform, Sensor, SensorType, PlatformType
@@ -37,6 +37,7 @@ class ConsoleDock(QDockWidget):
         parent: Optional[QWidget] = None
     ):
         super().__init__("Consola CLI", parent)
+        self.setLocale(QLocale.c())
         self.get_project = get_project
         self.get_solution = get_solution
         self.history: List[str] = []
@@ -105,6 +106,9 @@ class ConsoleDock(QDockWidget):
             self.print_line("  platforms                               : Lista las plataformas del proyecto")
             self.print_line("  platform add <id> [nom] [tipo] [fija]   : Crea y activa una plataforma en el workspace")
             self.print_line("  platform select <id>                    : Activa una plataforma existente")
+            self.print_line("  srts                                    : Lista los Sistemas de Referencia Terrestres (SRT)")
+            self.print_line("  srt add <id> [nom] [elip] [huso]        : Crea y activa un Sistema de Referencia Terrestre")
+            self.print_line("  srt select <id>                         : Activa un SRT existente")
             self.print_line("  chassis                                 : Consulta el chasis de la plataforma activa")
             self.print_line("  chassis box <L> <W> <H>                 : Define caja envolvente 3D (Largo, Ancho, Alto en m)")
             self.print_line("  chassis poly [S|F|L] (p1) (p2) ...      : Define polígono 2D por vértices")
@@ -128,11 +132,18 @@ class ConsoleDock(QDockWidget):
         elif root_cmd == "status":
             proj = self.get_project()
             plat = proj.platform
+            active_rs = proj.get_active_reference_system()
             self.print_line(f"Proyecto : {proj.name}")
-            self.print_line(f"Elipsoide: {proj.ellipsoid_name} | Huso UTM: {proj.config.get('utm_zone', 30)}")
+            if active_rs:
+                self.print_line(f"SRT Act. : [{active_rs.id}] {active_rs.name} (Elipsoide: {active_rs.ellipsoid}, UTM: {active_rs.utm_zone}{active_rs.utm_hemisphere}, N={active_rs.geoid_undulation_N:.4f}m, Dec={active_rs.magnetic_declination_deg:.4f}°)")
+            else:
+                self.print_line(f"Elipsoide: {proj.ellipsoid_name} | Huso UTM: {proj.config.get('utm_zone', 30)}")
             self.print_line(f"Plat. Act: {plat.name if plat else '(ninguna)'}")
             n_sens = len(plat.sensors) if plat else 0
             self.print_line(f"Sensores : {n_sens}\n")
+
+        elif root_cmd in ("srt", "srts"):
+            self._handle_srt_command(parts[1:])
 
         elif root_cmd in ("platform", "plat"):
             self._handle_platform_command(parts[1:])
@@ -170,6 +181,45 @@ class ConsoleDock(QDockWidget):
 
         else:
             self.print_line(f"Comando desconocido: '{root_cmd}'. Escriba 'help'.\n")
+
+    def _handle_srt_command(self, args: List[str]):
+        proj = self.get_project()
+        if not args or args[0].lower() in ("list", "ls"):
+            if not proj.reference_systems:
+                self.print_line("No hay sistemas de referencia terrestres registrados en el proyecto.\n")
+                return
+            self.print_line(f"Total Sistemas de Referencia (SRT): {len(proj.reference_systems)}")
+            for rid, r in proj.reference_systems.items():
+                act_mark = " [*ACTIVO]" if rid == proj.active_reference_system_id else ""
+                self.print_line(f"  [{rid}] {r.name} (Elipsoide: {r.ellipsoid}, UTM: {r.utm_zone}{r.utm_hemisphere}, N={r.geoid_undulation_N:.4f}m, Dec={r.magnetic_declination_deg:.4f}°){act_mark}")
+            self.print_line("")
+            return
+
+        sub = args[0].lower()
+        if sub in ("add", "create", "new"):
+            if len(args) < 2:
+                self.print_line("Error: Debe indicar al menos el identificador (ej: srt add SRT_02 'ETRS89' GRS80 30).\n")
+                return
+            rid = args[1].upper()
+            rname = args[2] if len(args) >= 3 else rid
+            ellips = args[3].upper() if len(args) >= 4 else "GRS80"
+            utm_z = int(args[4]) if len(args) >= 5 else 30
+            from core.models import ReferenceSystem
+            rs = ReferenceSystem(id=rid, name=rname, ellipsoid=ellips, utm_zone=utm_z, is_active=True)
+            proj.add_reference_system(rs, set_active=True)
+            self.print_line(f"[OK] Sistema de Referencia [{rid}] creado y establecido como activo.\n")
+        elif sub in ("select", "use", "set-active", "active"):
+            if len(args) < 2:
+                self.print_line("Error: Indique el identificador (ej: srt select SRT_01).\n")
+                return
+            rid = args[1].upper()
+            if rid not in proj.reference_systems:
+                self.print_line(f"Error: El SRT '{rid}' no existe en el proyecto.\n")
+                return
+            proj.set_active_reference_system(rid)
+            self.print_line(f"[OK] SRT activo conmutado a '{rid}'.\n")
+        else:
+            self.print_line(f"Subcomando desconocido: 'srt {sub}'. Uso: srt [list | add <id> [nombre] [elipsoide] [utm] | select <id>]\n")
 
     def _handle_platform_command(self, args: List[str]):
         proj = self.get_project()
@@ -540,13 +590,13 @@ class ConsoleDock(QDockWidget):
                 dp = float(args[3])
                 dy = float(args[4])
                 r, p, y = plat.sensors[code].boresight_deg
-                plat.sensors[code].boresight_deg = (round(r + dr, 3), round(p + dp, 3), round(y + dy, 3))
+                plat.sensors[code].boresight_deg = (round(r + dr, 6), round(p + dp, 6), round(y + dy, 6))
                 nb = plat.sensors[code].boresight_deg
                 r_rpy, p_rpy, y_rpy = plat.sensors[code].get_boresight_rpy()
                 self.sensor_modified.emit()
-                self.print_line(f"[OK] Boresight de sensor '{plat.sensors[code].name}' [{code}] rotado por (dα={dr:+.2f}°, dβ={dp:+.2f}°, dγ={dy:+.2f}°).")
-                self.print_line(f"     Calibración (α, β, γ): ({nb[0]:.2f}°, {nb[1]:.2f}°, {nb[2]:.2f}°)")
-                self.print_line(f"     Actitud aeroespacial (Roll, Pitch, Yaw): ({r_rpy:.2f}°, {p_rpy:.2f}°, {y_rpy:.2f}°).\n")
+                self.print_line(f"[OK] Boresight de sensor '{plat.sensors[code].name}' [{code}] rotado por (dα={dr:+.6f}°, dβ={dp:+.6f}°, dγ={dy:+.6f}°).")
+                self.print_line(f"     Calibración (α, β, γ): ({nb[0]:.6f}°, {nb[1]:.6f}°, {nb[2]:.6f}°)")
+                self.print_line(f"     Actitud aeroespacial (Roll, Pitch, Yaw): ({r_rpy:.6f}°, {p_rpy:.6f}°, {y_rpy:.6f}°).\n")
             except ValueError:
                 self.print_line("Error: Los ángulos deben ser valores numéricos en grados.\n")
             return

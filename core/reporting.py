@@ -7,6 +7,7 @@ de actitud para plataformas y rigs multisensores arbitrarios.
 """
 
 from datetime import datetime
+from typing import Any
 import numpy as np
 from .georeferencing import GeoreferencingSolution
 from .geodesy import rad_to_dms, ecef_to_geodetic
@@ -24,12 +25,15 @@ def generate_georeferencing_report(
     author: str = "Ingeniero PyGSN",
     project: str = "Proyecto de Georreferenciación y Navegación Multi-Sensor",
     doc_id: str = "PyGSN-GEOREF-SOLVER",
-    title: str = "INFORME TÉCNICO DE GEORREFERENCIACIÓN Y TRANSFORMACIÓN MULTISENSOR"
+    title: str = "INFORME TÉCNICO DE GEORREFERENCIACIÓN Y TRANSFORMACIÓN MULTISENSOR",
+    platform: Any = None
 ) -> str:
     """
     Genera el informe técnico estructurado de procesamiento paso a paso para georreferenciación
     y determinación de actitud de cualquier plataforma multisensor.
     """
+    if platform and hasattr(platform, "name") and project == "Proyecto de Georreferenciación y Navegación Multi-Sensor":
+        project = f"Plataforma {platform.name}"
     now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     ell = sol.ellipsoid
 

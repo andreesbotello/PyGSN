@@ -30,6 +30,7 @@ from PySide6.QtGui import (
 )
 
 from core.models import Platform, Sensor, SensorType
+from core.rotations import sensor_to_body_matrix
 from gui.theme import (
     COLOR_CANVAS_BG, COLOR_GRID_MAJOR, COLOR_GRID_MINOR,
     COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z, COLOR_PLATFORM_BODY,
@@ -1238,10 +1239,10 @@ class OrthoCADCanvas(QWidget):
 
             is_selected = (code == self.editing_sensor_code or code == getattr(self, "selected_sensor_code", None))
             if is_selected:
-                # Halo visual de selección técnica (cian translúcido)
+                # Halo visual de selección técnica (cuadrado cian translúcido)
                 p.setPen(QPen(QColor(14, 165, 233, 220), 2))
                 p.setBrush(QBrush(QColor(14, 165, 233, 50)))
-                p.drawEllipse(QPointF(sx, sy), 8.5, 8.5)
+                p.drawRoundedRect(QRectF(sx - 8.5, sy - 8.5, 17.0, 17.0), 2.0, 2.0)
 
             stype = s.sensor_type.value
             if "GNSS" in stype:
@@ -1253,14 +1254,49 @@ class OrthoCADCanvas(QWidget):
             else:
                 col = _to_qcolor(COLOR_SENSOR_DEFAULT)
 
-            p.setPen(QPen(col, 2))
+            # Requerimiento A.K: Línea punteada direccional hacia adelante para sensores direccionales y orientados
+            is_directional = ("CAM" in stype or "INS" in stype or "IMU" in stype or "LIDAR" in stype or any(abs(float(ang)) > 1e-5 for ang in (s.boresight_deg or (0,0,0))))
+            if is_directional:
+                a, b, c = s.get_boresight_alpha_beta_gamma()
+                Cs2b = sensor_to_body_matrix(np.radians(a), np.radians(b), np.radians(c))
+                # Vector unitario hacia adelante en s-frame [1, 0, 0] proyectado a b-frame
+                ux = float(Cs2b[0, 0])
+                uy = float(Cs2b[1, 0])
+                uz = float(Cs2b[2, 0])
+
+                line_len = 24.0
+                if self.view_type == "S":
+                    dx = uy * line_len
+                    dy = -ux * line_len
+                elif self.view_type == "F":
+                    dx = uy * line_len
+                    dy = uz * line_len
+                else: # L
+                    dx = ux * line_len
+                    dy = uz * line_len
+
+                mag = (dx**2 + dy**2)**0.5
+                if mag >= 2.0:
+                    pen_dash = QPen(col, 1.8, Qt.DashLine)
+                    p.setPen(pen_dash)
+                    p.drawLine(QPointF(sx, sy), QPointF(sx + dx, sy + dy))
+                    # Requerimiento A.K: Sin punto al final de la línea punteada
+                else:
+                    # Vector casi perpendicular al plano de proyección (indicador frontal)
+                    p.setPen(QPen(col, 1.2, Qt.DotLine))
+                    p.setBrush(Qt.NoBrush)
+                    p.drawEllipse(QPointF(sx, sy), 7.0, 7.0)
+
+            # Requerimiento A.K: Forma estrictamente cuadrada para discernir con vértices circulares
+            sq_half = 4.5
+            p.setPen(QPen(QColor(30, 41, 59, 230), 1.5))
             p.setBrush(QBrush(col))
-            p.drawEllipse(QPointF(sx, sy), 4, 4)
+            p.drawRect(QRectF(sx - sq_half, sy - sq_half, 2.0 * sq_half, 2.0 * sq_half))
 
             p.setPen(QPen(_to_qcolor(COLOR_TEXT_PRIMARY), 1))
             p.setFont(font_bold if is_selected else font)
             # Requerimiento A.G: mostrar el Nombre descriptivo del sensor, no su ID interno
-            p.drawText(QPointF(sx + 6, sy - 4), f"{s.name}")
+            p.drawText(QPointF(sx + 7, sy - 5), f"{s.name}")
 
     def _draw_scale_ruler(self, p: QPainter, w: int, h: int):
         """Dibuja en la esquina inferior izquierda la regla gráfica técnica con unidades activas."""

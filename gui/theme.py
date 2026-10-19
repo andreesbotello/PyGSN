@@ -8,10 +8,13 @@ Incluye soporte desacoplado para conmutación futura a tema oscuro.
 
 from typing import Tuple
 from pathlib import Path
+from PySide6.QtCore import QObject, QEvent
+from PySide6.QtWidgets import QWidget
 
 ICONS_DIR = Path(__file__).resolve().parent.parent / "icons"
 ARROW_DOWN_PATH = (ICONS_DIR / "arrow_down.svg").as_posix()
 ARROW_DOWN_LIGHT_PATH = (ICONS_DIR / "arrow_down_light.svg").as_posix()
+
 
 
 # ==============================================================================
@@ -357,22 +360,48 @@ QGroupBox::title {
     padding: 0 4px;
 }
 
-QCheckBox, QRadioButton {
+QCheckBox {
     spacing: 6px;
     color: #212529;
 }
 
-QCheckBox::indicator, QRadioButton::indicator {
-    width: 14px;
-    height: 14px;
+QCheckBox::indicator {
+    width: 13px;
+    height: 13px;
     background-color: #ffffff;
-    border: 1px solid #ced4da;
+    border: 1px solid #94a3b8;
     border-radius: 2px;
+}
+
+QCheckBox::indicator:hover {
+    border-color: #0077b6;
 }
 
 QCheckBox::indicator:checked {
     background-color: #0077b6;
+    border: 1px solid #005f92;
+}
+
+QRadioButton {
+    spacing: 6px;
+    color: #212529;
+}
+
+QRadioButton::indicator {
+    width: 13px;
+    height: 13px;
+    background-color: #ffffff;
+    border: 1px solid #94a3b8;
+    border-radius: 7px;
+}
+
+QRadioButton::indicator:hover {
     border-color: #0077b6;
+}
+
+QRadioButton::indicator:checked {
+    border: 1px solid #0077b6;
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.35, fx:0.5, fy:0.5, stop:0 #0077b6, stop:0.85 #0077b6, stop:0.86 #ffffff, stop:1.0 #ffffff);
 }
 
 QTableWidget {
@@ -388,6 +417,60 @@ QHeaderView::section {
     padding: 4px;
     border: 1px solid #dee2e6;
     font-weight: bold;
+}
+
+QTableCornerButton::section {
+    background-color: #e9ecef;
+    border: 1px solid #dee2e6;
+}
+
+QHeaderView::section:checked {
+    background-color: #dee2e6;
+    color: #0077b6;
+}
+
+/* ==========================================================================
+   QMessageBox y Diálogos de Alerta / Pop-ups
+   ========================================================================== */
+QMessageBox {
+    background-color: #ffffff;
+    color: #212529;
+}
+
+QMessageBox QLabel {
+    background: transparent;
+    color: #212529;
+    font-size: 12px;
+}
+
+QMessageBox QPushButton {
+    background-color: #0077b6;
+    color: #ffffff;
+    border: 1px solid #005f92;
+    border-radius: 4px;
+    padding: 5px 14px;
+    min-width: 110px;
+    min-height: 24px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+QMessageBox QPushButton:hover {
+    background-color: #0096c7;
+}
+
+QMessageBox QPushButton:pressed {
+    background-color: #023e8a;
+}
+
+QMessageBox QPushButton:focus {
+    outline: none;
+    border: 1px solid #0077b6;
+}
+
+QDialogButtonBox QPushButton {
+    min-width: 90px;
+    padding: 5px 12px;
 }
 """
 
@@ -545,6 +628,50 @@ QStatusBar {
     color: #8c96a5;
     font-size: 11px;
 }
+
+QCheckBox {
+    spacing: 6px;
+    color: #e6ebf5;
+}
+
+QCheckBox::indicator {
+    width: 13px;
+    height: 13px;
+    background-color: #1a1c24;
+    border: 1px solid #4b5563;
+    border-radius: 2px;
+}
+
+QCheckBox::indicator:hover {
+    border-color: #00b4d8;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #00b4d8;
+    border: 1px solid #0077b6;
+}
+
+QRadioButton {
+    spacing: 6px;
+    color: #e6ebf5;
+}
+
+QRadioButton::indicator {
+    width: 13px;
+    height: 13px;
+    background-color: #1a1c24;
+    border: 1px solid #4b5563;
+    border-radius: 7px;
+}
+
+QRadioButton::indicator:hover {
+    border-color: #00b4d8;
+}
+
+QRadioButton::indicator:checked {
+    border: 1px solid #00b4d8;
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.35, fx:0.5, fy:0.5, stop:0 #00b4d8, stop:0.85 #00b4d8, stop:0.86 #1a1c24, stop:1.0 #1a1c24);
+}
 """
 
 PYGSN_LIGHT_QSS = PYGSN_LIGHT_QSS.replace("__ARROW_DOWN__", ARROW_DOWN_PATH)
@@ -552,17 +679,6 @@ PYGSN_DARK_QSS = PYGSN_DARK_QSS.replace("__ARROW_DOWN__", ARROW_DOWN_LIGHT_PATH)
 
 # Alias por defecto
 PYGSN_QSS = PYGSN_LIGHT_QSS
-
-
-def apply_pyside_theme(app, mode: str = "light") -> None:
-    """
-    Aplica la hoja de estilos QSS a la aplicación Qt.
-    Por defecto aplica el tema claro (mode="light").
-    """
-    if mode.lower() == "dark":
-        app.setStyleSheet(PYGSN_DARK_QSS)
-    else:
-        app.setStyleSheet(PYGSN_LIGHT_QSS)
 
 
 def set_window_titlebar_light(window) -> None:
@@ -583,4 +699,33 @@ def set_window_titlebar_light(window) -> None:
             ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 36, byref(text_color), sizeof(text_color))
         except Exception:
             pass
+
+
+class LightTitlebarEventFilter(QObject):
+    """
+    Filtro de eventos global instalado en QApplication que intercepta
+    la visualización de ventanas, QMessageBox y diálogos para forzar
+    la barra de título clara en Windows 11.
+    """
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() in (QEvent.Show, QEvent.Polish):
+            if isinstance(watched, QWidget) and watched.isWindow():
+                set_window_titlebar_light(watched)
+        return super().eventFilter(watched, event)
+
+
+def apply_pyside_theme(app, mode: str = "light") -> None:
+    """
+    Aplica la hoja de estilos QSS a la aplicación Qt.
+    Por defecto aplica el tema claro (mode="light").
+    """
+    if mode.lower() == "dark":
+        app.setStyleSheet(PYGSN_DARK_QSS)
+    else:
+        app.setStyleSheet(PYGSN_LIGHT_QSS)
+
+    if not hasattr(app, "_light_titlebar_filter"):
+        app._light_titlebar_filter = LightTitlebarEventFilter(app)
+        app.installEventFilter(app._light_titlebar_filter)
+
 
