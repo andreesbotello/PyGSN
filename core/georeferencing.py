@@ -80,6 +80,12 @@ class GeoreferencingSolution:
     # Comparación de consistencia y residuales (GNSS vs INS) en UTM y cota
     diff_gnss_ins_utm: dict[str, tuple[float, float, float]]  # code -> (dE, dN, dH)
 
+    # Auditoría matemática y métricas de error
+    residuals_gnss_m: dict[str, float] = field(default_factory=dict) # code -> residuo 3D (m)
+    det_dcm: float = 1.0
+    ortho_error_dcm: float = 0.0
+    reference_system: Any = None
+
     # Aliases de compatibilidad para evitar rupturas de código previo
     @property
     def results_2a(self) -> dict[str, SensorResult]:
@@ -100,25 +106,61 @@ P1Solution = GeoreferencingSolution
 
 def solve_multisensor_georeferencing(
     platform: Platform,
-    gnss_observations: dict[str, tuple[np.float64, np.float64, np.float64]],
-    ins_attitude_deg: tuple[float, float, float],
+    gnss_observations: dict[str, tuple[np.float64, np.float64, np.float64]] | None = None,
+    ins_attitude_deg: tuple[float, float, float] | None = None,
     magnetic_declination_deg: float = -0.700,
     geoid_undulation_N: float = 50.0166,
     ellipsoid: Ellipsoid = GRS80,
     gnss_sensor_codes: list[str] | None = None,
-    ins_sensor_code: str | None = None
+    ins_sensor_code: str | None = None,
+    reference_system: Any = None,
+    utm_zone: int = 30,
+    utm_hemisphere: str = "N"
 ) -> GeoreferencingSolution:
     """
     Calcula la orientación y georreferenciación de una plataforma multisensor arbitraria.
+    Soporta desacoplamiento total mediante ReferenceSystem (SRT / e-frame).
     """
+    from .geodesy import utm_projection
+
+    if reference_system is not None:
+        if hasattr(reference_system, "get_ellipsoid"):
+            ellipsoid = reference_system.get_ellipsoid()
+        geoid_undulation_N = float(getattr(reference_system, "geoid_undulation_N", geoid_undulation_N))
+        magnetic_declination_deg = float(getattr(reference_system, "magnetic_declination_deg", magnetic_declination_deg))
+        utm_zone = int(getattr(reference_system, "utm_zone", utm_zone))
+        utm_hemisphere = str(getattr(reference_system, "utm_hemisphere", utm_hemisphere))
+
+    # Auto-detección de observaciones GNSS si no se proporcionan explícitamente
+    if gnss_observations is None:
+        gnss_observations = {}
+        for c, s in platform.sensors.items():
+            g_obs = s.geodetic_obs
+            if g_obs is not None:
+                gnss_observations[c] = g_obs
+
     if gnss_sensor_codes is None:
-        # Detectar dinámicamente sensores de la plataforma presentes en las observaciones
         gnss_sensor_codes = [c for c in gnss_observations.keys() if c in platform.sensors]
         if len(gnss_sensor_codes) < 3:
             raise ValueError(
                 f"Se requieren al menos 3 antenas GNSS coincidentes entre la plataforma y las observaciones "
                 f"(encontradas: {len(gnss_sensor_codes)})."
             )
+
+    # Auto-detección de actitud INS si no se proporciona
+    if ins_attitude_deg is None:
+        ins_sensor = None
+        if ins_sensor_code and ins_sensor_code in platform.sensors:
+            ins_sensor = platform.sensors[ins_sensor_code]
+        else:
+            for s in platform.sensors.values():
+                if s.sensor_type == SensorType.INS or s.code == "INS":
+                    ins_sensor = s
+                    break
+        if ins_sensor and ins_sensor.attitude_obs_deg is not None:
+            ins_attitude_deg = ins_sensor.attitude_obs_deg
+        else:
+            ins_attitude_deg = (0.0, 0.0, 0.0)
 
     # 1. Puntos GNSS en ECEF y Centroide
     gnss_ecef = {}
@@ -143,12 +185,15 @@ def solve_multisensor_georeferencing(
     pts_n = np.array([gnss_vectors_n[c] for c in gnss_sensor_codes]).T
 
     # 2. Resolución de actitud Cb2n mediante Procrustes SVD (Kabsch)
-    Cb2n_gnss, cent_b, cent_n, residuals = kabsch_orthogonal_procrustes(pts_b, pts_n)
+    Cb2n_gnss, cent_b, cent_n, raw_residuals = kabsch_orthogonal_procrustes(pts_b, pts_n)
     a1, a2, a3 = dcm_to_euler(Cb2n_gnss)
     roll_gnss, pitch_gnss, yaw_gnss = dcm_to_attitude(Cb2n_gnss)
 
     euler_gnss_deg = (float(np.degrees(a1)), float(np.degrees(a2)), float(np.degrees(a3)))
     attitude_gnss_deg = (float(np.degrees(roll_gnss)), float(np.degrees(pitch_gnss)), float(np.degrees(yaw_gnss)))
+
+    det_dcm = float(np.linalg.det(Cb2n_gnss))
+    ortho_error_dcm = float(np.linalg.norm(Cb2n_gnss @ Cb2n_gnss.T - np.eye(3)))
 
     # Origen de la plataforma en ECEF:
     Cn2e_cent = n_to_e_matrix(lat_cent, lon_cent)
@@ -159,6 +204,13 @@ def solve_multisensor_georeferencing(
     Cn2e_pla = n_to_e_matrix(lat_pla, lon_pla)
     Cb2e_1 = Cn2e_pla @ Cb2n_gnss
 
+    # Residuos métricos 3D por antena
+    residuals_gnss_m = {}
+    for code in gnss_sensor_codes:
+        calc_e = pla_ecef + Cb2e_1 @ platform.sensors[code].lever_arm_b
+        res_m = float(np.linalg.norm(gnss_ecef[code] - calc_e))
+        residuals_gnss_m[code] = res_m
+
     # 3. Propagación de todos los sensores con actitud GNSS
     all_devices_b = {code: s.lever_arm_b for code, s in platform.sensors.items()}
     all_devices_b["CENT"] = cent_b
@@ -167,7 +219,7 @@ def solve_multisensor_georeferencing(
     for code, xb in all_devices_b.items():
         xe = pla_ecef + Cb2e_1 @ xb
         lat_s, lon_s, h_s = ecef_to_geodetic(xe, ellipsoid)
-        easting, northing, zone = utm_projection_huso30(lat_s, lon_s, ellipsoid)
+        easting, northing, zone = utm_projection(lat_s, lon_s, zone=utm_zone, hemisphere=utm_hemisphere, ell=ellipsoid)
         h_orto = h_s - geoid_undulation_N
         results_gnss[code] = SensorResult(
             code=code, ecef=xe, lat_rad=lat_s, lon_rad=lon_s, h_ellip=h_s,
@@ -215,7 +267,7 @@ def solve_multisensor_georeferencing(
     for code, xb in all_devices_b.items():
         xe = pla_ecef + Cb2e_2b @ xb
         lat_s, lon_s, h_s = ecef_to_geodetic(xe, ellipsoid)
-        easting, northing, zone = utm_projection_huso30(lat_s, lon_s, ellipsoid)
+        easting, northing, zone = utm_projection(lat_s, lon_s, zone=utm_zone, hemisphere=utm_hemisphere, ell=ellipsoid)
         h_orto = h_s - geoid_undulation_N
         results_ins[code] = SensorResult(
             code=code, ecef=xe, lat_rad=lat_s, lon_rad=lon_s, h_ellip=h_s,
@@ -256,7 +308,11 @@ def solve_multisensor_georeferencing(
         euler_ins_deg=euler_ins_deg,
         attitude_ins_total_deg=attitude_ins_total_deg,
         results_ins=results_ins,
-        diff_gnss_ins_utm=diff_gnss_ins_utm
+        diff_gnss_ins_utm=diff_gnss_ins_utm,
+        residuals_gnss_m=residuals_gnss_m,
+        det_dcm=det_dcm,
+        ortho_error_dcm=ortho_error_dcm,
+        reference_system=reference_system
     )
 
 

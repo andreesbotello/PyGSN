@@ -35,9 +35,14 @@ class TestPySideGUI(unittest.TestCase):
         self.assertEqual(self.window.hierarchy_dock.tree.topLevelItemCount(), 1)
         root = self.window.hierarchy_dock.tree.topLevelItem(0)
         self.assertTrue("Proyecto" in root.text(0))
-        # Debe haber un texto indicando que no hay plataformas
-        self.assertEqual(root.childCount(), 1)
-        self.assertTrue("No hay plataformas" in root.child(0).text(0))
+        # Debe haber 2 ramas: Plataformas y Sistemas de Referencia
+        self.assertEqual(root.childCount(), 2)
+        plat_group = root.child(0)
+        self.assertTrue("Plataformas" in plat_group.text(0))
+        self.assertTrue("No hay plataformas" in plat_group.child(0).text(0))
+        srts_group = root.child(1)
+        self.assertTrue("Sistemas de Referencia" in srts_group.text(0))
+        self.assertTrue("No hay sistemas de referencia" in srts_group.child(0).text(0))
 
     def test_create_and_activate_platform(self):
         """Verifica la creación de una plataforma y su activación en el Workspace CAD."""
@@ -53,10 +58,12 @@ class TestPySideGUI(unittest.TestCase):
         self.window.project.add_platform(plat, set_active=True)
         self.window.on_project_changed()
 
-        # Debe estar en el árbol
+        # Debe estar en el árbol dentro de la rama Plataformas
         root = self.window.hierarchy_dock.tree.topLevelItem(0)
-        self.assertEqual(root.childCount(), 1)
-        plat_item = root.child(0)
+        self.assertEqual(root.childCount(), 2)
+        plat_group = root.child(0)
+        self.assertEqual(plat_group.childCount(), 1)
+        plat_item = plat_group.child(0)
         self.assertTrue("Vehiculo Test" in plat_item.text(0))
 
         # Abrir pestaña en el workspace
@@ -72,6 +79,46 @@ class TestPySideGUI(unittest.TestCase):
         self.assertEqual(cad_widget.canvas_single.view_type, "S")
         cad_widget.set_quad_mode()
         self.assertTrue(cad_widget.is_quad_mode)
+
+    def test_reference_system_lifecycle(self):
+        """Verifica la creación, listado y eliminación en el árbol para Sistemas de Referencia Terrestres."""
+        from core.models import ReferenceSystem
+        proj = self.window.project
+        # Arranque limpio: 0 SRTs iniciales
+        self.assertEqual(len(proj.reference_systems), 0)
+
+        # Añadir un SRT
+        rs1 = ReferenceSystem(id="SRT_01", name="ETRS89 UTM 30N", ellipsoid="GRS80", utm_zone=30)
+        proj.add_reference_system(rs1)
+        self.window.on_project_changed()
+
+        self.assertEqual(len(proj.reference_systems), 1)
+        root = self.window.hierarchy_dock.tree.topLevelItem(0)
+        srts_group = root.child(1)
+        self.assertEqual(srts_group.childCount(), 1)
+        self.assertTrue("SRT_01" in srts_group.child(0).text(0))
+
+        # Añadir un segundo SRT
+        rs2 = ReferenceSystem(id="SRT_02", name="UTM 31N WGS84", ellipsoid="WGS84", utm_zone=31)
+        proj.add_reference_system(rs2)
+        self.window.on_project_changed()
+        self.assertEqual(len(proj.reference_systems), 2)
+        srts_group = self.window.hierarchy_dock.tree.topLevelItem(0).child(1)
+        self.assertEqual(srts_group.childCount(), 2)
+
+        # Eliminar el primer SRT libremente
+        proj.remove_reference_system("SRT_01")
+        self.window.on_project_changed()
+        self.assertEqual(len(proj.reference_systems), 1)
+        srts_group = self.window.hierarchy_dock.tree.topLevelItem(0).child(1)
+        self.assertEqual(srts_group.childCount(), 1)
+
+        # Eliminar también el segundo SRT (permitiendo volver a 0)
+        proj.remove_reference_system("SRT_02")
+        self.window.on_project_changed()
+        self.assertEqual(len(proj.reference_systems), 0)
+        srts_group = self.window.hierarchy_dock.tree.topLevelItem(0).child(1)
+        self.assertTrue("No hay sistemas de referencia" in srts_group.child(0).text(0))
 
     def test_sensor_mounting_and_centration(self):
         """Verifica el montaje de sensores y los comandos de centrado."""

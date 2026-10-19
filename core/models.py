@@ -24,6 +24,183 @@ class SensorType(str, Enum):
     OTHER = "OTHER"
 
 
+def parse_dms_or_deg(s: str) -> float:
+    """
+    Parsea una coordenada en formato sexagesimal (ej: 39º28'53.133637", -0º20'7.650964", 39d28m53.13s)
+    o decimal estándar (ej: 39.481426, -0.335458).
+    """
+    import re
+    s_clean = s.strip().replace("“", "\"").replace("”", "\"").replace("''", "\"")
+    try:
+        return float(s_clean)
+    except ValueError:
+        pass
+
+    is_neg = s_clean.startswith("-") or "S" in s_clean.upper() or "W" in s_clean.upper() or "O" in s_clean.upper()
+    tokens = re.split(r"[º°'\"dmsDMS\s\-_+NSEWO\ufffd]+", s_clean)
+    tokens = [t for t in tokens if t]
+    if len(tokens) >= 3:
+        d = float(tokens[0])
+        m = float(tokens[1])
+        sec = float(tokens[2])
+        deg = d + m / 60.0 + sec / 3600.0
+    elif len(tokens) == 2:
+        d = float(tokens[0])
+        m = float(tokens[1])
+        deg = d + m / 60.0
+    elif len(tokens) == 1:
+        deg = float(tokens[0])
+    else:
+        raise ValueError(f"No se pudo parsear coordenada: {s}")
+    return -deg if is_neg else deg
+
+
+@dataclass
+class SensorObservation:
+    """
+    Observaciones de campo del sensor en el mundo real (e-frame o n-frame local).
+    Permite desacoplar y asociar mediciones a un Sistema de Referencia Terrestre específico.
+    """
+    ref_system_id: str = ""                                               # ID del SRT de referencia
+    geodetic_deg: tuple[float, float, float] | None = None                # (lat_deg, lon_deg, h_m)
+    attitude_rpy_deg: tuple[float, float, float] | None = None            # (roll_deg, pitch_deg, yaw_deg)
+
+    @property
+    def has_geodetic(self) -> bool:
+        return self.geodetic_deg is not None
+
+    @property
+    def has_attitude(self) -> bool:
+        return self.attitude_rpy_deg is not None
+
+    def get_lat_lon_h_rad(self) -> tuple[np.float64, np.float64, np.float64] | None:
+        if self.geodetic_deg is None:
+            return None
+        lat, lon, h = self.geodetic_deg
+        return (np.radians(np.float64(lat)), np.radians(np.float64(lon)), np.float64(h))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ref_system_id": self.ref_system_id,
+            "geodetic_deg": [float(x) for x in self.geodetic_deg] if self.geodetic_deg else None,
+            "attitude_rpy_deg": [float(x) for x in self.attitude_rpy_deg] if self.attitude_rpy_deg else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SensorObservation":
+        return cls(
+            ref_system_id=data.get("ref_system_id", ""),
+            geodetic_deg=tuple(data["geodetic_deg"]) if data.get("geodetic_deg") else None,
+            attitude_rpy_deg=tuple(data["attitude_rpy_deg"]) if data.get("attitude_rpy_deg") else None,
+        )
+
+
+@dataclass
+class SensorGeoref:
+    """Atributos propagados del sensor en el sistema terrestre (e-frame / SRT)."""
+    ref_system_id: str                          # Identificador del SRT (ej. "SRT_01")
+    ref_system_name: str = ""                   # Nombre legible del SRT (ej. "ETRS89 / UTM 30N")
+    ecef: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64)) # [X, Y, Z] en metros
+    lat_deg: float = 0.0                        # Latitud geodésica en grados
+    lon_deg: float = 0.0                        # Longitud geodésica en grados
+    h_ellip_m: float = 0.0                      # Altura elipsoidal en metros
+    utm_easting_m: float = 0.0                  # Coordenada X / Este UTM (m)
+    utm_northing_m: float = 0.0                 # Coordenada Y / Norte UTM (m)
+    utm_zone: int = 30                          # Huso UTM
+    utm_hemisphere: str = "N"                   # Hemisferio UTM ('N' o 'S')
+    h_ortho_m: float = 0.0                      # Altura ortométrica H = h - N (m)
+    computed_via: str = "SVD"                   # "SVD", "INS", "SVD+INS"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ref_system_id": self.ref_system_id,
+            "ref_system_name": self.ref_system_name,
+            "ecef": [float(x) for x in self.ecef],
+            "lat_deg": float(self.lat_deg),
+            "lon_deg": float(self.lon_deg),
+            "h_ellip_m": float(self.h_ellip_m),
+            "utm_easting_m": float(self.utm_easting_m),
+            "utm_northing_m": float(self.utm_northing_m),
+            "utm_zone": int(self.utm_zone),
+            "utm_hemisphere": self.utm_hemisphere,
+            "h_ortho_m": float(self.h_ortho_m),
+            "computed_via": self.computed_via,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SensorGeoref":
+        return cls(
+            ref_system_id=data.get("ref_system_id", ""),
+            ref_system_name=data.get("ref_system_name", ""),
+            ecef=np.array(data.get("ecef", [0.0, 0.0, 0.0]), dtype=np.float64),
+            lat_deg=float(data.get("lat_deg", 0.0)),
+            lon_deg=float(data.get("lon_deg", 0.0)),
+            h_ellip_m=float(data.get("h_ellip_m", 0.0)),
+            utm_easting_m=float(data.get("utm_easting_m", 0.0)),
+            utm_northing_m=float(data.get("utm_northing_m", 0.0)),
+            utm_zone=int(data.get("utm_zone", 30)),
+            utm_hemisphere=data.get("utm_hemisphere", "N"),
+            h_ortho_m=float(data.get("h_ortho_m", 0.0)),
+            computed_via=data.get("computed_via", "SVD"),
+        )
+
+
+@dataclass
+class PlatformPose:
+    """Pose estimada del centro de referencia de la plataforma (PLA) en el sistema terrestre (e-frame)."""
+    ref_system_id: str
+    ref_system_name: str = ""
+    ecef: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64)) # [X, Y, Z] PLA en m
+    lat_deg: float = 0.0
+    lon_deg: float = 0.0
+    h_ellip_m: float = 0.0
+    utm_easting_m: float = 0.0
+    utm_northing_m: float = 0.0
+    utm_zone: int = 30
+    utm_hemisphere: str = "N"
+    h_ortho_m: float = 0.0
+    attitude_rpy_deg: tuple[float, float, float] = (0.0, 0.0, 0.0) # (roll, pitch, yaw) [deg]
+    dcm_b2e: list[list[float]] = field(default_factory=lambda: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    method: str = "SVD"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ref_system_id": self.ref_system_id,
+            "ref_system_name": self.ref_system_name,
+            "ecef": [float(x) for x in self.ecef],
+            "lat_deg": float(self.lat_deg),
+            "lon_deg": float(self.lon_deg),
+            "h_ellip_m": float(self.h_ellip_m),
+            "utm_easting_m": float(self.utm_easting_m),
+            "utm_northing_m": float(self.utm_northing_m),
+            "utm_zone": int(self.utm_zone),
+            "utm_hemisphere": self.utm_hemisphere,
+            "h_ortho_m": float(self.h_ortho_m),
+            "attitude_rpy_deg": list(self.attitude_rpy_deg),
+            "dcm_b2e": [[float(v) for v in row] for row in self.dcm_b2e],
+            "method": self.method,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PlatformPose":
+        return cls(
+            ref_system_id=data.get("ref_system_id", ""),
+            ref_system_name=data.get("ref_system_name", ""),
+            ecef=np.array(data.get("ecef", [0.0, 0.0, 0.0]), dtype=np.float64),
+            lat_deg=float(data.get("lat_deg", 0.0)),
+            lon_deg=float(data.get("lon_deg", 0.0)),
+            h_ellip_m=float(data.get("h_ellip_m", 0.0)),
+            utm_easting_m=float(data.get("utm_easting_m", 0.0)),
+            utm_northing_m=float(data.get("utm_northing_m", 0.0)),
+            utm_zone=int(data.get("utm_zone", 30)),
+            utm_hemisphere=data.get("utm_hemisphere", "N"),
+            h_ortho_m=float(data.get("h_ortho_m", 0.0)),
+            attitude_rpy_deg=tuple(data.get("attitude_rpy_deg", (0.0, 0.0, 0.0))),
+            dcm_b2e=data.get("dcm_b2e", [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+            method=data.get("method", "SVD"),
+        )
+
+
 @dataclass
 class Sensor:
     """Modelo de un sensor instalado en la plataforma."""
@@ -32,10 +209,54 @@ class Sensor:
     sensor_type: SensorType = SensorType.OTHER
     lever_arm_b: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64)) # [x1, x2, x3] en b-frame (m)
     boresight_deg: tuple[float, float, float] = (0.0, 0.0, 0.0) # (alpha, beta, gamma) en deg
-    
-    # Observaciones opcionales asociadas al sensor
-    geodetic_obs: tuple[np.float64, np.float64, np.float64] | None = None  # (lat_rad, lon_rad, h_m)
-    attitude_obs_deg: tuple[float, float, float] | None = None              # (roll, pitch, yaw) deg
+    observation: SensorObservation | None = None # Observables de campo asociados
+    georef: SensorGeoref | None = None           # Coordenadas y atributos calculados en e-frame tras georreferenciación
+
+    def __post_init__(self) -> None:
+        if self.code:
+            self.code = self.code.strip()
+        if self.name:
+            self.name = self.name.strip()
+
+    @property
+    def is_georeferenced(self) -> bool:
+        """Indica si el sensor dispone de coordenadas propagadas en el e-frame."""
+        return self.georef is not None
+
+    @property
+    def geodetic_obs(self) -> tuple[np.float64, np.float64, np.float64] | None:
+        if self.observation and self.observation.has_geodetic:
+            return self.observation.get_lat_lon_h_rad()
+        return None
+
+    @geodetic_obs.setter
+    def geodetic_obs(self, val: tuple[float, float, float] | None):
+        if val is None:
+            if self.observation:
+                self.observation.geodetic_deg = None
+            return
+        lat_deg = float(np.degrees(val[0]))
+        lon_deg = float(np.degrees(val[1]))
+        h_m = float(val[2])
+        if not self.observation:
+            self.observation = SensorObservation()
+        self.observation.geodetic_deg = (lat_deg, lon_deg, h_m)
+
+    @property
+    def attitude_obs_deg(self) -> tuple[float, float, float] | None:
+        if self.observation and self.observation.has_attitude:
+            return self.observation.attitude_rpy_deg
+        return None
+
+    @attitude_obs_deg.setter
+    def attitude_obs_deg(self, val: tuple[float, float, float] | None):
+        if val is None:
+            if self.observation:
+                self.observation.attitude_rpy_deg = None
+            return
+        if not self.observation:
+            self.observation = SensorObservation()
+        self.observation.attitude_rpy_deg = (float(val[0]), float(val[1]), float(val[2]))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -44,21 +265,63 @@ class Sensor:
             "sensor_type": self.sensor_type.value,
             "lever_arm_b": [float(x) for x in self.lever_arm_b],
             "boresight_deg": [float(x) for x in self.boresight_deg],
+            "observation": self.observation.to_dict() if self.observation else None,
+            "georef": self.georef.to_dict() if self.georef else None,
             "geodetic_obs": [float(x) for x in self.geodetic_obs] if self.geodetic_obs else None,
             "attitude_obs_deg": list(self.attitude_obs_deg) if self.attitude_obs_deg else None,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Sensor":
+        obs = None
+        if "observation" in data and data["observation"]:
+            obs = SensorObservation.from_dict(data["observation"])
+        elif data.get("geodetic_obs") or data.get("attitude_obs_deg"):
+            obs = SensorObservation()
+            if data.get("geodetic_obs"):
+                g = data["geodetic_obs"]
+                obs.geodetic_deg = (float(np.degrees(g[0])), float(np.degrees(g[1])), float(g[2]))
+            if data.get("attitude_obs_deg"):
+                obs.attitude_rpy_deg = tuple(float(x) for x in data["attitude_obs_deg"])
+
+        georef = SensorGeoref.from_dict(data["georef"]) if data.get("georef") else None
+
         return cls(
             code=data["code"],
             name=data.get("name", data["code"]),
             sensor_type=SensorType(data.get("sensor_type", "OTHER")),
             lever_arm_b=np.array(data["lever_arm_b"], dtype=np.float64),
             boresight_deg=tuple(data.get("boresight_deg", (0.0, 0.0, 0.0))),
-            geodetic_obs=tuple(data["geodetic_obs"]) if data.get("geodetic_obs") else None,
-            attitude_obs_deg=tuple(data["attitude_obs_deg"]) if data.get("attitude_obs_deg") else None,
+            observation=obs,
+            georef=georef,
         )
+
+    def get_attributes_dict(self) -> dict[str, Any]:
+        """Retorna un diccionario estructurado tipo tabla de atributos F6 con columnas b-frame y e-frame."""
+        return {
+            "code": self.code,
+            "name": self.name,
+            "type": self.sensor_type.value,
+            "xb_m": float(self.lever_arm_b[0]),
+            "yb_m": float(self.lever_arm_b[1]),
+            "zb_m": float(self.lever_arm_b[2]),
+            "alpha_deg": float(self.boresight_deg[0]),
+            "beta_deg": float(self.boresight_deg[1]),
+            "gamma_deg": float(self.boresight_deg[2]),
+            "is_georef": self.is_georeferenced,
+            "srt_id": self.georef.ref_system_id if self.georef else "-",
+            "srt_name": self.georef.ref_system_name if self.georef else "-",
+            "xe_m": float(self.georef.ecef[0]) if self.georef else None,
+            "ye_m": float(self.georef.ecef[1]) if self.georef else None,
+            "ze_m": float(self.georef.ecef[2]) if self.georef else None,
+            "lat_deg": self.georef.lat_deg if self.georef else None,
+            "lon_deg": self.georef.lon_deg if self.georef else None,
+            "h_ellip_m": self.georef.h_ellip_m if self.georef else None,
+            "utm_e_m": self.georef.utm_easting_m if self.georef else None,
+            "utm_n_m": self.georef.utm_northing_m if self.georef else None,
+            "h_ortho_m": self.georef.h_ortho_m if self.georef else None,
+            "computed_via": self.georef.computed_via if self.georef else "-",
+        }
 
     def get_boresight_alpha_beta_gamma(self) -> tuple[float, float, float]:
         """Devuelve los ángulos de desalineamiento de calibración (alpha, beta, gamma) en grados."""
@@ -112,6 +375,65 @@ def infer_sensor_type_from_code(code: str) -> SensorType:
     return SensorType.OTHER
 
 
+@dataclass
+class ReferenceSystem:
+    """
+    Modelo de un Sistema de Referencia Terrestre (SRT / e-frame).
+    Contiene la parametrizacion geodesica local y de proyeccion:
+    - Elipsoide de referencia (GRS80, WGS84)
+    - Ondulacion del geoide N (m)
+    - Declinacion magnetica delta (deg)
+    - Zona UTM (1..60) y hemisferio ('N' o 'S')
+    - Estado activo dentro del proyecto
+    """
+    id: str                                      # Identificador unico (ej. "SRT_01")
+    name: str = ""                               # Nombre descriptivo (ej. "ETRS89 / UTM 30N")
+    ellipsoid: str = "GRS80"                     # "GRS80" o "WGS84"
+    geoid_undulation_N: float = 0.0              # metros (N)
+    magnetic_declination_deg: float = 0.0        # grados (delta)
+    utm_zone: int = 30                           # 1 a 60
+    utm_hemisphere: str = "N"                    # "N" o "S"
+    is_active: bool = False                      # Marca de SRT activo
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def get_ellipsoid(self):
+        """Devuelve la instancia de Ellipsoid correspondiente."""
+        from .geodesy import GRS80, WGS84
+        return WGS84 if self.ellipsoid.upper() == "WGS84" else GRS80
+
+    @property
+    def ellipsoid_obj(self):
+        """Propiedad de compatibilidad que devuelve la instancia de Ellipsoid."""
+        return self.get_ellipsoid()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "ellipsoid": self.ellipsoid,
+            "geoid_undulation_N": float(self.geoid_undulation_N),
+            "magnetic_declination_deg": float(self.magnetic_declination_deg),
+            "utm_zone": int(self.utm_zone),
+            "utm_hemisphere": self.utm_hemisphere,
+            "is_active": self.is_active,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ReferenceSystem":
+        return cls(
+            id=data["id"],
+            name=data.get("name", data["id"]),
+            ellipsoid=data.get("ellipsoid", "GRS80"),
+            geoid_undulation_N=float(data.get("geoid_undulation_N", 0.0)),
+            magnetic_declination_deg=float(data.get("magnetic_declination_deg", 0.0)),
+            utm_zone=int(data.get("utm_zone", 30)),
+            utm_hemisphere=str(data.get("utm_hemisphere", "N")),
+            is_active=bool(data.get("is_active", False)),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
 class PlatformType(str, Enum):
     GENERIC = "GENERIC"
     VEHICLE = "VEHICLE"
@@ -137,6 +459,7 @@ class Platform:
     chassis_polygon: list[list[float]] | None = None # Polígono 2D opcional del chasis en b-frame [[x, y], ...]
     chassis_center_b: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0]) # Centroide/offset 3D del chasis [xb, yb, zb]
     sensors: dict[str, Sensor] = field(default_factory=dict)
+    pose_e: PlatformPose | None = None          # Pose del centro de plataforma (PLA) en e-frame tras georreferenciación
 
     def __post_init__(self) -> None:
         if (self.length_m > 0 or self.width_m > 0 or self.height_m > 0 or self.chassis_polygon) and not self.has_dimensions:
@@ -167,6 +490,7 @@ class Platform:
             "height_m": self.height_m,
             "chassis_polygon": self.chassis_polygon,
             "chassis_center_b": list(self.chassis_center_b),
+            "pose_e": self.pose_e.to_dict() if self.pose_e else None,
             "sensors": {k: s.to_dict() for k, s in self.sensors.items()}
         }
 
@@ -184,6 +508,7 @@ class Platform:
             height_m=float(data.get("height_m", 0.0)),
             chassis_polygon=data.get("chassis_polygon"),
             chassis_center_b=list(data.get("chassis_center_b", [0.0, 0.0, 0.0])),
+            pose_e=PlatformPose.from_dict(data["pose_e"]) if data.get("pose_e") else None,
         )
         for s_data in data.get("sensors", {}).values():
             plat.add_sensor(Sensor.from_dict(s_data))
@@ -408,6 +733,242 @@ class Platform:
             lines.append(f"{code:<8s} {t_str:<12s} {x1:10.4f} {x2:10.4f} {x3:10.4f}  {a:11.6f} {b:11.6f} {c:11.6f}  {name_clean}")
         return "\n".join(lines) + "\n"
 
+    def import_sensors_from_table(self, file_path: Any, ref_system_id: str = "") -> list["Sensor"]:
+        """
+        Importa sensores y sus atributos (lever-arms b-frame, boresight y observables de campo)
+        a partir de una tabla en formato Excel (.xlsx), CSV (.csv) o texto (.txt / .dat).
+        Admite encabezados flexibles (ej. 'Sensores', 'X1_m', 'alpha_deg', 'Latitud', 'roll_deg', etc.)
+        Si no se detectan encabezados tabulares en archivos de texto, aplica fallback automático
+        al formato clásico de 'sensores.txt' (7 u 8+ columnas).
+        """
+        from pathlib import Path
+        import re
+        import csv
+
+        path = Path(file_path)
+        rows_data: list[dict[str, Any]] = []
+        is_xlsx = path.suffix.lower() == ".xlsx"
+
+        if is_xlsx:
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(path, data_only=True)
+                sheet = wb.active
+                raw_rows = []
+                for r in sheet.iter_rows(values_only=True):
+                    if any(v is not None and str(v).strip() != "" for v in r):
+                        raw_rows.append(list(r))
+                if raw_rows:
+                    header = [str(c) if c is not None else "" for c in raw_rows[0]]
+                    for row in raw_rows[1:]:
+                        row_dict = {}
+                        for i, val in enumerate(row):
+                            if i < len(header):
+                                row_dict[header[i]] = val
+                        rows_data.append(row_dict)
+            except Exception as e:
+                raise ValueError(f"Error al leer archivo Excel '{path.name}': {e}")
+        else:
+            # Archivo de texto / CSV / TSV
+            content = None
+            for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+                try:
+                    with open(path, "r", encoding=enc) as f:
+                        content = f.read()
+                    break
+                except UnicodeDecodeError:
+                    continue
+            if content is None:
+                raise ValueError(f"No se pudo decodificar el archivo '{path.name}'")
+
+            lines = [l for l in content.splitlines() if l.strip() and not l.strip().startswith("#")]
+            if not lines:
+                return []
+
+            first_line = lines[0]
+            delim = None
+            if "\t" in first_line:
+                delim = "\t"
+            elif ";" in first_line:
+                delim = ";"
+            elif "," in first_line:
+                delim = ","
+
+            if delim:
+                reader = csv.DictReader(lines, delimiter=delim)
+                for r in reader:
+                    rows_data.append(dict(r))
+            else:
+                parts_0 = first_line.split()
+                has_header = any(
+                    re.sub(r'[\s_]+', '', p.lower()) in (
+                        "sensores", "sensor", "nombre", "x1m", "x1", "alphadeg", "latitud", "rolldeg"
+                    ) for p in parts_0
+                )
+                if has_header:
+                    header = parts_0
+                    for line in lines[1:]:
+                        parts = line.split()
+                        row_dict = {}
+                        for i, p in enumerate(parts):
+                            if i < len(header):
+                                row_dict[header[i]] = p
+                        rows_data.append(row_dict)
+                else:
+                    return self.import_sensors_from_txt(content)
+
+        if not rows_data:
+            return []
+
+        # Normalización de cabeceras de columnas
+        sample_keys = list(rows_data[0].keys())
+        col_map: dict[str, str] = {}
+        for k in sample_keys:
+            k_clean = re.sub(r'[\s_]+', '', str(k).strip().lower())
+            if k_clean in ("sensores", "sensor", "nombre", "name", "code", "id"):
+                col_map["name"] = k
+            elif k_clean in ("x1m", "x1", "xm", "x", "xb", "leverx") or k_clean.startswith("x1"):
+                col_map["x1"] = k
+            elif k_clean in ("x2m", "x2", "ym", "y", "yb", "levery") or k_clean.startswith("x2"):
+                col_map["x2"] = k
+            elif k_clean in ("x3m", "x3", "zm", "z", "zb", "leverz") or k_clean.startswith("x3"):
+                col_map["x3"] = k
+            elif k_clean in ("alphadeg", "alpha", "alfadeg", "alfa", "a") or k_clean.startswith("alpha") or k_clean.startswith("alfa"):
+                col_map["alpha"] = k
+            elif k_clean in ("betadeg", "beta", "b") or k_clean.startswith("beta"):
+                col_map["beta"] = k
+            elif k_clean in ("gammadeg", "gamma", "c") or k_clean.startswith("gamma"):
+                col_map["gamma"] = k
+            elif k_clean in ("latitud", "latitude", "lat", "phi") or k_clean.startswith("lat"):
+                col_map["lat"] = k
+            elif k_clean in ("longitud", "longitude", "lon", "lambda") or k_clean.startswith("lon"):
+                col_map["lon"] = k
+            elif k_clean in ("helip", "hellip", "h", "helip.", "cotaelipsoidal", "alturaelip") or k_clean.startswith("helip"):
+                col_map["h_elip"] = k
+            elif k_clean in ("rolldeg", "roll", "alabeo") or k_clean.startswith("roll"):
+                col_map["roll_obs"] = k
+            elif k_clean in ("pitchdeg", "pitch", "cabeceo") or k_clean.startswith("pitch"):
+                col_map["pitch_obs"] = k
+            elif k_clean in ("yawdeg", "yaw", "guinada", "rumbo") or k_clean.startswith("yaw"):
+                col_map["yaw_obs"] = k
+
+        if "name" not in col_map:
+            col_map["name"] = sample_keys[0]
+
+        imported_sensors: list[Sensor] = []
+
+        def _to_float(v: Any, default: float = 0.0) -> float:
+            if v is None or str(v).strip() == "" or str(v).strip().lower() == "none":
+                return default
+            try:
+                return float(v)
+            except ValueError:
+                return default
+
+        for row in rows_data:
+            raw_name = row.get(col_map["name"])
+            if raw_name is None or str(raw_name).strip() == "":
+                continue
+            name_str = str(raw_name).strip()
+            code_upper = name_str.upper()
+
+            # Extraer lever-arm
+            x1 = _to_float(row.get(col_map.get("x1", "")))
+            x2 = _to_float(row.get(col_map.get("x2", "")))
+            x3 = _to_float(row.get(col_map.get("x3", "")))
+            lever_arm = np.array([x1, x2, x3], dtype=np.float64)
+
+            # Extraer boresight
+            alpha = _to_float(row.get(col_map.get("alpha", "")))
+            beta = _to_float(row.get(col_map.get("beta", "")))
+            gamma = _to_float(row.get(col_map.get("gamma", "")))
+            boresight = (alpha, beta, gamma)
+
+            # Extraer observables de campo
+            obs: SensorObservation | None = None
+            lat_val = row.get(col_map.get("lat", ""))
+            lon_val = row.get(col_map.get("lon", ""))
+            h_val = row.get(col_map.get("h_elip", ""))
+
+            has_geo = (lat_val is not None and str(lat_val).strip() != "" and str(lat_val).strip().lower() != "none" and
+                       lon_val is not None and str(lon_val).strip() != "" and str(lon_val).strip().lower() != "none")
+
+            if has_geo:
+                try:
+                    lat_deg = parse_dms_or_deg(str(lat_val))
+                    lon_deg = parse_dms_or_deg(str(lon_val))
+                    h_m = _to_float(h_val, 0.0)
+                    obs = SensorObservation(ref_system_id=ref_system_id, geodetic_deg=(lat_deg, lon_deg, h_m))
+                except Exception:
+                    pass
+
+            roll_val = row.get(col_map.get("roll_obs", ""))
+            pitch_val = row.get(col_map.get("pitch_obs", ""))
+            yaw_val = row.get(col_map.get("yaw_obs", ""))
+
+            has_att = (roll_val is not None and str(roll_val).strip() != "" and str(roll_val).strip().lower() != "none" and
+                       pitch_val is not None and str(pitch_val).strip() != "" and str(pitch_val).strip().lower() != "none" and
+                       yaw_val is not None and str(yaw_val).strip() != "" and str(yaw_val).strip().lower() != "none")
+
+            if has_att:
+                try:
+                    r_deg = float(roll_val)
+                    p_deg = float(pitch_val)
+                    y_deg = float(yaw_val)
+                    if obs is None:
+                        obs = SensorObservation(ref_system_id=ref_system_id, attitude_rpy_deg=(r_deg, p_deg, y_deg))
+                    else:
+                        obs.attitude_rpy_deg = (r_deg, p_deg, y_deg)
+                except Exception:
+                    pass
+
+            # Inferencia del tipo de sensor
+            if has_geo or "REC" in code_upper or "GNSS" in code_upper or "GPS" in code_upper:
+                stype = SensorType.GNSS
+            elif has_att or "INS" in code_upper or "IMU" in code_upper:
+                stype = SensorType.INS
+            elif "CAM" in code_upper:
+                stype = SensorType.CAMERA
+            elif "LIDAR" in code_upper:
+                stype = SensorType.LIDAR
+            elif "ODO" in code_upper:
+                stype = SensorType.ODOMETER
+            elif code_upper in ("PLA", "PLATAFORMA", "ORIGEN", "CHASIS"):
+                stype = SensorType.PLATFORM_ORIGIN
+            else:
+                stype = infer_sensor_type_from_code(code_upper)
+
+            # Buscar si el sensor ya existe en la plataforma (por código o por nombre)
+            existing_sensor = None
+            if code_upper in self.sensors:
+                existing_sensor = self.sensors[code_upper]
+            else:
+                for s in self.sensors.values():
+                    if s.name.strip().upper() == code_upper or s.code.strip().upper() == code_upper:
+                        existing_sensor = s
+                        break
+
+            if existing_sensor:
+                existing_sensor.lever_arm_b = lever_arm
+                existing_sensor.boresight_deg = boresight
+                existing_sensor.sensor_type = stype
+                if obs is not None:
+                    existing_sensor.observation = obs
+                imported_sensors.append(existing_sensor)
+            else:
+                new_s = Sensor(
+                    code=code_upper,
+                    name=name_str,
+                    sensor_type=stype,
+                    lever_arm_b=lever_arm,
+                    boresight_deg=boresight,
+                    observation=obs
+                )
+                self.add_sensor(new_s)
+                imported_sensors.append(new_s)
+
+        return imported_sensors
+
     def import_sensors_from_txt(self, txt_content: str) -> list[Sensor]:
         """
         Importa sensores a partir del contenido de un archivo de texto.
@@ -523,4 +1084,79 @@ class Platform:
                         pass
         plat.import_sensors_from_txt(txt_content)
         return plat
+
+    def import_observations_from_txt(self, txt_content: str, ref_system_id: str = "") -> dict[str, int]:
+        """
+        Importa observaciones de campo (GNSS lat/lon/h o INS roll/pitch/yaw)
+        asociándolas a los sensores existentes de la plataforma.
+        Formato estándar de 4 columnas delimitadas por espacios o tabulaciones:
+          SENSOR   LATITUD            LONGITUD           H_ELIP     (para GNSS: sexagesimal DMS o decimal)
+          SENSOR   ROLL(deg)          PITCH(deg)         YAW(deg)   (para INS: grados decimales)
+        Retorna diccionario con el recuento de observaciones importadas: {"gnss": count, "attitude": count}.
+        """
+        counts = {"gnss": 0, "attitude": 0}
+
+        for line in txt_content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+
+            code_raw = parts[0].strip().upper()
+            if code_raw.lower() in ("sensor", "id", "code", "nombre", "dispositivo"):
+                continue
+
+            target_sensor = None
+            # Prioridad 1: Coincidencia por Nombre asignado por el usuario (limpio de espacios, insensible a mayúsculas)
+            for s in self.sensors.values():
+                if s.name and s.name.strip().upper() == code_raw:
+                    target_sensor = s
+                    break
+            # Prioridad 2: Coincidencia por Código interno (por si el fichero o sensor usan el código)
+            if not target_sensor:
+                for s in self.sensors.values():
+                    if s.code and s.code.strip().upper() == code_raw:
+                        target_sensor = s
+                        break
+            if not target_sensor:
+                continue
+
+            sens = target_sensor
+
+            # Caso INS / IMU: Roll, Pitch, Yaw en grados
+            if sens.sensor_type == SensorType.INS or "INS" in code_raw or "IMU" in code_raw:
+                try:
+                    r = float(parts[1])
+                    p = float(parts[2])
+                    y = float(parts[3])
+                    if not sens.observation:
+                        sens.observation = SensorObservation(ref_system_id=ref_system_id)
+                    sens.observation.attitude_rpy_deg = (r, p, y)
+                    if ref_system_id:
+                        sens.observation.ref_system_id = ref_system_id
+                    counts["attitude"] += 1
+                except ValueError:
+                    pass
+                continue
+
+            # Caso GNSS / Posición geodésica: Latitud, Longitud, Altura elipsoidal
+            try:
+                lat_deg = parse_dms_or_deg(parts[1])
+                lon_deg = parse_dms_or_deg(parts[2])
+                h_m = float(parts[3])
+                if not sens.observation:
+                    sens.observation = SensorObservation(ref_system_id=ref_system_id)
+                sens.observation.geodetic_deg = (lat_deg, lon_deg, h_m)
+                if ref_system_id:
+                    sens.observation.ref_system_id = ref_system_id
+                counts["gnss"] += 1
+            except ValueError:
+                pass
+
+        return counts
+
+
 

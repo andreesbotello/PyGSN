@@ -18,8 +18,8 @@ from PySide6.QtWidgets import (
     QStatusBar, QLabel, QFileDialog, QMessageBox, QWidget, QDockWidget,
     QDoubleSpinBox, QComboBox, QAbstractSpinBox
 )
-from PySide6.QtCore import Qt, QPoint
-from PySide6.QtGui import QAction, QIcon, QKeySequence
+from PySide6.QtCore import Qt, QPoint, QLocale
+from PySide6.QtGui import QAction, QIcon, QKeySequence, QShortcut
 
 from core.models import Platform
 from core.project import Project
@@ -29,18 +29,22 @@ from gui.theme import apply_pyside_theme, set_window_titlebar_light
 from gui.dock_hierarchy import HierarchyDock
 from gui.dock_console import ConsoleDock
 from gui.canvas_ortho import OrthoCADWidget
+from gui.canvas_map import CartoMapWidget
 from gui.panel_georeferencing import GeoreferencingWidget
 from gui.panel_report import ReportViewerWidget
 from gui.panel_kinematics import KinematicsWidget
 from gui.dialogs import (
     DialogNewProject, DialogProjectProperties, DialogCreatePlatform,
     DialogPlatformProperties, DialogAddSensor, DialogSensorProperties,
-    DialogChassisActions, DialogDiagnostics
+    DialogChassisActions, DialogDiagnostics,
+    DialogCreateReferenceSystem, DialogReferenceSystemProperties
 )
 from gui.dialogs_tools import (
     ToolDialogMoveChassis, ToolDialogRotateChassis, ToolDialogScaleChassis,
     ToolDialogSensorMove, ToolDialogSensorRotate
 )
+from gui.dialog_georeferencing import DialogGeoreferencingSolver
+from gui.dialog_attribute_table import DialogAttributeTable
 
 
 class PyGSNMainWindow(QMainWindow):
@@ -48,10 +52,12 @@ class PyGSNMainWindow(QMainWindow):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self.setLocale(QLocale.c())
         self.project: Project = Project(name="Proyecto sin título", platforms={})
         self.current_project_file: Optional[Path] = None
 
         self.platform_canvases: Dict[str, OrthoCADWidget] = {}
+        self.map_canvases: Dict[str, CartoMapWidget] = {}
         self.panel_georef: Optional[GeoreferencingWidget] = None
         self.panel_report: Optional[ReportViewerWidget] = None
         self.panel_kinematics: Optional[KinematicsWidget] = None
@@ -126,6 +132,7 @@ class PyGSNMainWindow(QMainWindow):
         self.hierarchy_dock.add_sensor_requested.connect(self.show_add_sensor_dialog)
         self.hierarchy_dock.import_sensors_requested.connect(self.action_import_sensors_file)
         self.hierarchy_dock.platform_properties_requested.connect(self.show_platform_properties_dialog)
+        self.hierarchy_dock.platform_attribute_table_requested.connect(self.action_open_attribute_table)
         self.hierarchy_dock.delete_platform_requested.connect(self.delete_platform)
         self.hierarchy_dock.chassis_edit_requested.connect(self.start_chassis_edit)
         self.hierarchy_dock.chassis_clear_requested.connect(self.clear_chassis)
@@ -134,6 +141,12 @@ class PyGSNMainWindow(QMainWindow):
         self.hierarchy_dock.sensor_zoom_requested.connect(self.zoom_to_sensor)
         self.hierarchy_dock.sensor_properties_requested.connect(self.show_sensor_properties_dialog)
         self.hierarchy_dock.delete_sensor_requested.connect(self.delete_sensor)
+        self.hierarchy_dock.create_platform_requested.connect(self.action_create_platform)
+        self.hierarchy_dock.create_reference_system_requested.connect(self.action_create_reference_system)
+        self.hierarchy_dock.reference_system_activated.connect(self.action_set_active_reference_system)
+        self.hierarchy_dock.reference_system_map_requested.connect(self.open_reference_system_map)
+        self.hierarchy_dock.reference_system_properties_requested.connect(self.action_reference_system_properties)
+        self.hierarchy_dock.delete_reference_system_requested.connect(self.action_delete_reference_system)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.hierarchy_dock)
 
         # Dock Derecho: Consola CLI (oculta por defecto)
@@ -157,57 +170,69 @@ class PyGSNMainWindow(QMainWindow):
         # 1. Menú Proyecto
         menu_proj = mb.addMenu("&Proyecto")
         menu_proj.addAction("Nuevo Proyecto...", self.action_new_project, QKeySequence.New)
-        menu_proj.addAction("Abrir Proyecto (.pygsn)...", self.action_open_project, QKeySequence.Open)
+        menu_proj.addAction("Abrir Proyecto...", self.action_open_project, QKeySequence.Open)
         menu_proj.addSeparator()
         menu_proj.addAction("Guardar", self.action_save_project, QKeySequence.Save)
         menu_proj.addAction("Guardar Como...", self.action_save_project_as)
         menu_proj.addSeparator()
-        menu_proj.addAction("Propiedades del Proyecto...", self.action_project_properties)
-        menu_proj.addAction("Exportar Informe TXT...", self.action_export_report)
+        menu_proj.addAction("Propiedades...", self.action_project_properties)
+        menu_proj.addAction("Exportar Informe...", self.action_export_report)
         menu_proj.addSeparator()
-        menu_proj.addAction("Salir de PyGSN", self.close, QKeySequence.Quit)
+        menu_proj.addAction("Salir", self.close, QKeySequence.Quit)
 
-        # 2. Menú Plataforma
-        menu_plat = mb.addMenu("&Plataforma")
-        self.action_menu_new_plat = menu_plat.addAction("Crear Nueva Plataforma...", self.action_create_platform)
-        self.action_menu_open_plat = menu_plat.addAction(
+        # 2. Menú Crear (antiguo Plataforma)
+        menu_create = mb.addMenu("&Crear")
+        self.action_menu_new_plat = menu_create.addAction("Nueva Plataforma...", self.action_create_platform)
+        self.action_menu_add_sens = menu_create.addAction(
+            "Nuevo Sensor...",
+            lambda: self.show_add_sensor_dialog(self.project.active_platform_id) if self.project.active_platform_id else None
+        )
+        menu_create.addSeparator()
+        self.action_menu_new_rs = menu_create.addAction(
+            "Nuevo Sistema de Referencia...",
+            self.action_create_reference_system
+        )
+        menu_create.addSeparator()
+        self.action_menu_open_plat = menu_create.addAction(
             "Abrir Plataforma en Workspace",
             lambda: self.open_platform_tab(self.project.active_platform_id) if self.project.active_platform_id else None
         )
-        menu_plat.addSeparator()
-        self.action_menu_add_sens = menu_plat.addAction(
-            "Añadir sensor...",
-            lambda: self.show_add_sensor_dialog(self.project.active_platform_id) if self.project.active_platform_id else None
-        )
-        menu_plat.addSeparator()
-        menu_plat.addAction("Importar Calibración (.txt)...", self.action_import_calibration)
-        menu_plat.addAction("Exportar Calibración (.txt)...", self.action_export_calibration)
+        menu_create.addSeparator()
+        menu_create.addAction("Importar Calibración...", self.action_import_calibration)
+        menu_create.addAction("Exportar Calibración...", self.action_export_calibration)
 
         # 3. Menú Procesamiento
         menu_proc = mb.addMenu("P&rocesamiento")
-        menu_proc.addAction("Resolver Georreferenciación & Actitud (SVD)", self.action_solve_georef)
-        menu_proc.addAction("Simulación Cinemática de Trayectorias", self.open_kinematics_tab)
+        menu_proc.addAction("Georreferenciación Multipunto...", self.action_open_georeferencing_solver)
+        menu_proc.addAction("Tabla de Atributos (F6)", self.action_open_active_attribute_table, QKeySequence("F6"))
+        menu_proc.addAction("Calcular Orientación (SVD)", self.action_solve_georef)
+        menu_proc.addAction("Simulación Cinemática", self.open_kinematics_tab)
         menu_proc.addSeparator()
-        menu_proc.addAction("Cargar Observaciones de Campo (.txt)...", self.action_load_observations)
+        menu_proc.addAction("Cargar Observaciones...", self.action_load_observations)
+
+        # Atajo global de Tabla de Atributos (F6)
+        self.shortcut_f6 = QShortcut(QKeySequence("F6"), self, self.action_open_active_attribute_table)
 
         # 4. Menú Análisis
         menu_ana = mb.addMenu("&Análisis")
-        menu_ana.addAction("Inspeccionar Residuales GNSS vs INS", self.action_show_residuals)
-        menu_ana.addAction("Diagnóstico SVD y Auditoría de Matrices DCM", self.action_show_diagnostics)
+        menu_ana.addAction("Residuales GNSS vs INS", self.action_show_residuals)
+        menu_ana.addAction("Auditoría y Diagnóstico DCM", self.action_show_diagnostics)
 
         # 5. Menú Vista
         menu_vis = mb.addMenu("Vista")
-        menu_vis.addAction("Mostrar/Ocultar Panel de Capas", lambda: self.hierarchy_dock.setVisible(not self.hierarchy_dock.isVisible()))
-        menu_vis.addAction("Mostrar/Ocultar Consola CLI", self.toggle_console)
+        menu_vis.addAction("Panel de Capas", lambda: self.hierarchy_dock.setVisible(not self.hierarchy_dock.isVisible()))
+        menu_vis.addAction("Consola CLI", self.toggle_console)
         menu_vis.addSeparator()
-        menu_vis.addAction("Centrar Vista al Origen [0, 0, 0]", lambda: self.center_platform_origin(self.project.active_platform_id))
-        menu_vis.addAction("Centrar Vista al Centroide", lambda: self.center_platform_centroid(self.project.active_platform_id))
+        menu_vis.addAction("Abrir Mapa (e-frame)...", lambda: self.open_reference_system_map())
+        menu_vis.addSeparator()
+        menu_vis.addAction("Centrar en Origen", lambda: self.center_platform_origin(self.project.active_platform_id))
+        menu_vis.addAction("Centrar en Centroide", lambda: self.center_platform_centroid(self.project.active_platform_id))
         menu_vis.addSeparator()
         menu_vis.addAction("Pantalla Completa", self.toggle_fullscreen, QKeySequence("F11"))
 
         # 6. Menú Ayuda
         menu_help = mb.addMenu("A&yuda")
-        menu_help.addAction("Acerca de PyGSN", self.action_about)
+        menu_help.addAction("Acerca de", self.action_about)
 
         # Atajo global de Deshacer (Ctrl+Z)
         self.action_undo_op = QAction("Deshacer Operación", self)
@@ -611,7 +636,7 @@ class PyGSNMainWindow(QMainWindow):
                 parent=self
             )
         else:
-            self.tool_dlg_sens_move.setWindowTitle(f"Mover Sensor {sens_name} - PyGSN")
+            self.tool_dlg_sens_move.setWindowTitle(f"Mover: {sens_name}")
         self._position_tool_dialog(self.tool_dlg_sens_move)
         self.tool_dlg_sens_move.show()
         self.tool_dlg_sens_move.raise_()
@@ -653,30 +678,31 @@ class PyGSNMainWindow(QMainWindow):
                 parent=self
             )
         else:
-            self.tool_dlg_sens_rot.setWindowTitle(f"Rotar Boresight {sens_name} - PyGSN")
+            self.tool_dlg_sens_rot.setWindowTitle(f"Rotar: {sens_name}")
         self._position_tool_dialog(self.tool_dlg_sens_rot)
         self.tool_dlg_sens_rot.show()
         self.tool_dlg_sens_rot.raise_()
         self.tool_dlg_sens_rot.activateWindow()
 
-    def _apply_sensor_rotate(self, droll: float, dpitch: float, dyaw: float):
+    def _apply_sensor_rotate(self, da: float, db: float, dc: float):
         if not self.editing_sensor_code or not self.editing_platform_id:
             return
         plat = self.project.get_platform(self.editing_platform_id)
         if not plat or self.editing_sensor_code not in plat.sensors:
             return
         sens = plat.sensors[self.editing_sensor_code]
-        sens.boresight_deg = [
-            float(sens.boresight_deg[0] + droll),
-            float(sens.boresight_deg[1] + dpitch),
-            float(sens.boresight_deg[2] + dyaw)
-        ]
+        cur_a, cur_b, cur_c = sens.get_boresight_alpha_beta_gamma()
+        sens.boresight_deg = (
+            round(float(cur_a + da), 6),
+            round(float(cur_b + db), 6),
+            round(float(cur_c + dc), 6)
+        )
         self._undo_stack.append(plat.to_dict())
         self.is_dirty = True
         if self.editing_platform_id in self.platform_canvases:
             self.platform_canvases[self.editing_platform_id].redraw_all()
         self.hierarchy_dock.rebuild_tree()
-        self.lbl_status_state.setText(f"[Sensor] Boresight de '{sens.name}' rotado ({sens.boresight_deg[0]:.1f}°, {sens.boresight_deg[1]:.1f}°, {sens.boresight_deg[2]:.1f}°)")
+        self.lbl_status_state.setText(f"[Sensor] Boresight de '{sens.name}' rotado ({sens.boresight_deg[0]:.6f}°, {sens.boresight_deg[1]:.6f}°, {sens.boresight_deg[2]:.6f}°)")
 
     def action_undo(self):
         """Revierte la última operación en la plataforma o sensor bajo edición."""
@@ -766,7 +792,7 @@ class PyGSNMainWindow(QMainWindow):
             # Desactivar edición: comprobar si hay cambios pendientes
             if self.is_dirty:
                 msg_box = QMessageBox(self)
-                msg_box.setWindowTitle("Guardar Cambios de Edición - PyGSN")
+                msg_box.setWindowTitle("Guardar Cambios")
                 msg_box.setText(f"Ha realizado modificaciones en la plataforma '{self.editing_platform_id}'.\n¿Desea guardar o descartar los cambios?")
                 set_window_titlebar_light(msg_box)
                 btn_save = msg_box.addButton("Guardar Cambios", QMessageBox.AcceptRole)
@@ -881,7 +907,7 @@ class PyGSNMainWindow(QMainWindow):
 
             if self.is_dirty:
                 msg_box = QMessageBox(self)
-                msg_box.setWindowTitle("Guardar Cambios de Sensor - PyGSN")
+                msg_box.setWindowTitle("Guardar Cambios")
                 msg_box.setText(f"Ha realizado modificaciones en el sensor '{sens_name}'.\n¿Desea guardar o descartar los cambios?")
                 set_window_titlebar_light(msg_box)
                 btn_save = msg_box.addButton("Guardar Cambios", QMessageBox.AcceptRole)
@@ -1062,6 +1088,42 @@ class PyGSNMainWindow(QMainWindow):
         self.workspace.setCurrentIndex(idx)
         self._on_workspace_tab_changed(idx)
 
+    def open_reference_system_map(self, rs_id: Optional[str] = None):
+        """Abre o activa la pestaña de mapa cartográfico 2D (e-frame) para el Sistema de Referencia Terrestre."""
+        if not rs_id:
+            rs_id = getattr(self.project, "active_reference_system_id", None)
+            if not rs_id and getattr(self.project, "reference_systems", None):
+                rs_id = next(iter(self.project.reference_systems.keys()))
+
+        if not rs_id or rs_id not in self.project.reference_systems:
+            QMessageBox.warning(
+                self, "Sistema de Referencia no Encontrado",
+                "No hay ningún Sistema de Referencia Terrestre (SRT) configurado en el proyecto."
+            )
+            return
+
+        rs = self.project.reference_systems[rs_id]
+        tab_title = f"Mapa: {rs.name}"
+
+        # Comprobar si ya existe abierta en el workspace
+        for i in range(self.workspace.count()):
+            w = self.workspace.widget(i)
+            if isinstance(w, CartoMapWidget) and w.ref_system_id == rs_id:
+                self.workspace.setCurrentIndex(i)
+                w.refresh()
+                return
+
+        # Crear nuevo widget de mapa
+        map_widget = CartoMapWidget(
+            get_project=lambda: self.project,
+            ref_system_id=rs_id,
+            parent=self
+        )
+        self.map_canvases[rs_id] = map_widget
+        idx = self.workspace.addTab(map_widget, tab_title)
+        self.workspace.setCurrentIndex(idx)
+        self.lbl_status_state.setText(f"[Mapa] Vista cartográfica e-frame activada ({rs.name})")
+
     def _on_canvas_sensor_placed(self, plat_id: str, code: str, x: float, y: float, z: float):
         if self.editing_target_type == "SENSOR" and self.editing_platform_id == plat_id:
             plat = self.project.get_platform(plat_id)
@@ -1115,6 +1177,10 @@ class PyGSNMainWindow(QMainWindow):
                 return
             if plat_id and plat_id in self.platform_canvases:
                 del self.platform_canvases[plat_id]
+        elif isinstance(widget, CartoMapWidget):
+            rs_id = widget.ref_system_id
+            if rs_id in self.map_canvases:
+                del self.map_canvases[rs_id]
         self.workspace.removeTab(index)
 
     def center_platform_origin(self, plat_id: Optional[str]):
@@ -1187,36 +1253,44 @@ class PyGSNMainWindow(QMainWindow):
 
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            f"Importar Sensores para '{plat.name}' - PyGSN",
+            f"Importar Sensores y Atributos para '{plat.name}' - PyGSN",
             "",
-            "Archivos de texto (*.txt *.dat *.csv);;Todos los archivos (*.*)"
+            "Tablas de Sensores y Atributos (*.xlsx *.csv *.txt *.dat);;Libros de Excel (*.xlsx);;Archivos de Texto / CSV (*.txt *.csv *.dat);;Todos los archivos (*.*)"
         )
         if not file_path:
             return
 
+        self._undo_stack.append(plat.to_dict())
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-        except UnicodeDecodeError:
-            with open(file_path, "r", encoding="latin-1") as f:
-                content = f.read()
+            srt = self.project.get_active_reference_system()
+            srt_id = srt.id if srt else ""
+            imported = plat.import_sensors_from_table(file_path, ref_system_id=srt_id)
         except Exception as e:
-            QMessageBox.critical(self, "Error de Lectura", f"No se pudo leer el archivo:\n{e}")
+            QMessageBox.critical(self, "Error de Importación", f"No se pudo procesar el archivo:\n{e}")
             return
 
-        self._undo_stack.append(plat.to_dict())
-        imported = plat.import_sensors_from_txt(content)
         if imported:
             self.is_dirty = True
             if plat_id in self.platform_canvases:
                 self.platform_canvases[plat_id].redraw_all()
             self.on_project_changed()
-            self.lbl_status_state.setText(f"[Importación] {len(imported)} sensores importados con éxito en '{plat.name}'.")
+            geo_count = sum(1 for s in imported if s.observation and s.observation.has_geodetic)
+            att_count = sum(1 for s in imported if s.observation and s.observation.has_attitude)
+            obs_info = f" ({geo_count} con GNSS, {att_count} con INS)" if (geo_count or att_count) else ""
+            self.lbl_status_state.setText(f"[Importación] {len(imported)} sensores importados en '{plat.name}'{obs_info}.")
+            QMessageBox.information(
+                self, "Importación Exitosa",
+                f"Se han importado/actualizado {len(imported)} sensores en '{plat.name}':\n"
+                f"- Sensores geométricos en b-frame: {len(imported)}\n"
+                f"- Observaciones GNSS asociadas: {geo_count}\n"
+                f"- Observaciones de actitud INS asociadas: {att_count}\n\n"
+                f"Los observables quedarán precargados automáticamente en el solver de georreferenciación."
+            )
         else:
             QMessageBox.warning(
                 self, "Aviso de Importación",
-                "No se encontraron líneas de sensores válidas en el archivo seleccionado.\n"
-                "Verifique el formato (ej. 'Sensor x1_m x2_m x3_m alpha_deg beta_deg gamma_deg')."
+                "No se encontraron filas o registros de sensores válidos en el archivo seleccionado.\n"
+                "Verifique el formato (ej. columnas 'Sensores', 'X1_m', 'X2_m', 'X3_m', 'alpha_deg', etc.)."
             )
 
     def show_platform_properties_dialog(self, plat_id: str):
@@ -1325,10 +1399,14 @@ class PyGSNMainWindow(QMainWindow):
         if dlg.exec():
             dlg.apply_changes()
             self.is_dirty = True
+            if self.editing_target_type == "SENSOR" and self.editing_platform_id == plat_id:
+                self._undo_stack.append(plat.to_dict())
             if plat_id in self.platform_canvases:
+                self.platform_canvases[plat_id].platform = plat
                 self.platform_canvases[plat_id].redraw_all()
             self.on_project_changed()
-            self.lbl_status_state.setText(f"[OK] Propiedades del sensor '{sensor.code}' actualizadas.")
+            self.hierarchy_dock.rebuild_tree()
+            self.lbl_status_state.setText(f"[OK] Propiedades del sensor '{sensor.name}' actualizadas.")
 
     def delete_sensor(self, plat_id: str, sensor_code: str):
         plat = self.project.get_platform(plat_id)
@@ -1448,6 +1526,8 @@ class PyGSNMainWindow(QMainWindow):
             if p:
                 widget.platform = p
                 widget.redraw_all()
+        for map_w in self.map_canvases.values():
+            map_w.refresh()
         self.update_ui_state()
 
     # =========================================================================
@@ -1471,6 +1551,7 @@ class PyGSNMainWindow(QMainWindow):
             self.current_project_file = None
             self.workspace.clear()
             self.platform_canvases.clear()
+            self.map_canvases.clear()
             self.update_ui_state()
             self.lbl_status_state.setText(f"[OK] Nuevo proyecto creado: {new_proj.name}")
 
@@ -1487,6 +1568,7 @@ class PyGSNMainWindow(QMainWindow):
             self.current_project_file = p
             self.workspace.clear()
             self.platform_canvases.clear()
+            self.map_canvases.clear()
             self.update_ui_state()
             self.lbl_status_state.setText(f"[OK] Proyecto cargado: {p.name}")
         except Exception as e:
@@ -1547,6 +1629,57 @@ class PyGSNMainWindow(QMainWindow):
             self.open_platform_tab(plat.id)
             self.lbl_status_state.setText(f"[OK] Plataforma '{plat.name}' ({plat.id}) creada.")
 
+    def action_create_reference_system(self):
+        """Abre el diálogo para crear un nuevo Sistema de Referencia Terrestre (SRT / e-frame)."""
+        existing_ids = list(self.project.reference_systems.keys())
+        dlg = DialogCreateReferenceSystem(
+            existing_ids=existing_ids,
+            existing_count=len(self.project.reference_systems),
+            parent=self
+        )
+        if dlg.exec():
+            rs = dlg.get_reference_system()
+            self.project.add_reference_system(rs, set_active=rs.is_active)
+            self.is_dirty = True
+            self.on_project_changed()
+            self.lbl_status_state.setText(f"[OK] Sistema de referencia terrestre '{rs.name}' ({rs.id}) creado.")
+
+    def action_set_active_reference_system(self, rs_id: str):
+        """Establece el Sistema de Referencia Terrestre activo del proyecto."""
+        if self.project.set_active_reference_system(rs_id):
+            self.is_dirty = True
+            self.on_project_changed()
+            self.lbl_status_state.setText(f"[OK] Sistema de referencia '{rs_id}' seleccionado.")
+
+    def action_reference_system_properties(self, rs_id: str):
+        """Abre el diálogo de propiedades de un Sistema de Referencia Terrestre."""
+        rs = self.project.get_reference_system(rs_id)
+        if not rs:
+            return
+        dlg = DialogReferenceSystemProperties(rs, self)
+        if dlg.exec():
+            if rs.is_active:
+                self.project.set_active_reference_system(rs.id)
+            self.is_dirty = True
+            self.on_project_changed()
+            self.lbl_status_state.setText(f"[OK] Propiedades de '{rs.name}' ({rs.id}) actualizadas.")
+
+    def action_delete_reference_system(self, rs_id: str):
+        """Elimina un Sistema de Referencia Terrestre del proyecto."""
+        rs = self.project.get_reference_system(rs_id)
+        if not rs:
+            return
+        res = QMessageBox.question(
+            self, "Confirmar Eliminación",
+            f"¿Está seguro de eliminar el sistema de referencia terrestre '{rs.id}' ({rs.name})?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if res == QMessageBox.Yes:
+            self.project.remove_reference_system(rs_id)
+            self.is_dirty = True
+            self.on_project_changed()
+            self.lbl_status_state.setText(f"[OK] Sistema de referencia '{rs_id}' eliminado.")
+
     def action_import_calibration(self):
         fpath, _ = QFileDialog.getOpenFileName(
             self, "Importar Calibración", "data", "Texto (*.txt);;Todos (*.*)"
@@ -1578,6 +1711,41 @@ class PyGSNMainWindow(QMainWindow):
             self.lbl_status_state.setText(f"[OK] Calibración guardada en {Path(fpath).name}")
         except Exception as e:
             QMessageBox.critical(self, "Error al Exportar", f"No se pudo guardar el archivo: {str(e)}")
+
+    def action_open_georeferencing_solver(self):
+        """Abre el diálogo técnico e interactivo de Georreferenciación Multipunto (b-frame ↔ e-frame)."""
+        dlg = DialogGeoreferencingSolver(self.project, self)
+        dlg.solution_applied.connect(self.on_project_changed)
+        dlg.exec()
+
+    def action_open_attribute_table(self, plat_id: Optional[str] = None):
+        """Abre la Tabla de Atributos interactiva (estilo QGIS F6) para la plataforma indicada."""
+        if not plat_id:
+            plat = self.project.get_active_platform()
+            if not plat and self.project.platforms:
+                plat = next(iter(self.project.platforms.values()))
+            if not plat:
+                QMessageBox.information(
+                    self,
+                    "Tabla de Atributos",
+                    "No hay ninguna plataforma definida en el proyecto actual."
+                )
+                return
+            plat_id = plat.id
+
+        plat = self.project.platforms.get(plat_id)
+        if not plat:
+            QMessageBox.warning(self, "Aviso", f"No se encontró la plataforma '{plat_id}'.")
+            return
+
+        dlg = DialogAttributeTable(platform=plat, parent=self)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def action_open_active_attribute_table(self):
+        """Abre la Tabla de Atributos (F6) para la plataforma activa actual."""
+        self.action_open_attribute_table(self.project.active_platform_id)
 
     def action_solve_georef(self):
         self.open_solver_tab()
@@ -1623,7 +1791,7 @@ class PyGSNMainWindow(QMainWindow):
         """Gestiona el cierre ordenado de la aplicación preguntando si hay cambios pendientes."""
         if self.is_dirty:
             msg_box = QMessageBox(self)
-            msg_box.setWindowTitle("Cierre del Programa - PyGSN")
+            msg_box.setWindowTitle("Salir")
             msg_box.setText("Existen modificaciones sin guardar en el proyecto actual.\n¿Desea guardar los cambios antes de salir?")
             set_window_titlebar_light(msg_box)
             btn_save = msg_box.addButton("Guardar", QMessageBox.AcceptRole)
@@ -1660,6 +1828,8 @@ class PyGSNApp:
         except Exception:
             pass
 
+        # Requerimiento A.L: Punto decimal estrictamente programático estándar C en toda la suite
+        QLocale.setDefault(QLocale.c())
         self.app = QApplication(sys.argv)
 
         # Establecer icono global de la suite

@@ -193,20 +193,21 @@ def rad_to_dms(rad: np.float64) -> tuple[int, int, float, str]:
     return d if sign == " " else -d, m, s, formatted
 
 
-def utm_projection_huso30(
+def utm_projection(
     lat_rad: np.float64,
     lon_rad: np.float64,
+    zone: int = 30,
+    hemisphere: str = "N",
     ell: Ellipsoid = GRS80
 ) -> tuple[np.float64, np.float64, int]:
     """
-    Proyecta coordenadas geodesicas a UTM Huso 30 Norte (meridiano central -3 deg).
-    Formulacion de Gauss-Kruger / Transversa de Mercator estandar.
+    Proyecta coordenadas geodésicas a UTM para cualquier huso (1..60) y hemisferio ('N' o 'S').
+    Formulación de Gauss-Krüger / Transversa de Mercator estándar.
 
     Retorna:
         (Easting, Northing, Zone)
     """
-    zone = 30
-    lon0_deg = np.float64(-3.0)  # Meridiano central huso 30
+    lon0_deg = np.float64((zone - 1) * 6 - 180 + 3)  # Meridiano central del huso
     lon0_rad = np.radians(lon0_deg)
 
     k0 = np.float64(0.9996)
@@ -224,7 +225,6 @@ def utm_projection_huso30(
     nu = a / np.sqrt(np.float64(1.0) - e2 * (sin_phi ** 2))
     eta2 = ep2 * (cos_phi ** 2)
 
-    # Arco meridiano meridional S(phi)
     # Coeficientes de la serie del arco meridiano
     A0 = 1.0 - (e2 / 4.0) - (3.0 * e2**2 / 64.0) - (5.0 * e2**3 / 256.0)
     A2 = (3.0 / 8.0) * (e2 + (e2**2 / 4.0) + (15.0 * e2**3 / 128.0))
@@ -233,7 +233,6 @@ def utm_projection_huso30(
 
     S = a * (A0 * phi - A2 * np.sin(2.0 * phi) + A4 * np.sin(4.0 * phi) - A6 * np.sin(6.0 * phi))
 
-    # Desarrollo en serie de potencias de delta_lam
     t = tan_phi
     t2 = t * t
     c = eta2
@@ -252,4 +251,89 @@ def utm_projection_huso30(
     n_term6 = (dl**6 / 720.0) * sin_phi * (cos_p**5) * (61.0 - 58.0 * t2 + t2**2 + 600.0 * c - 330.0 * ep2)
     northing = k0 * (S + nu * (n_term2 + n_term4 + n_term6))
 
+    if hemisphere.upper() == "S":
+        northing += 10000000.0
+
     return easting, northing, zone
+
+
+def utm_projection_huso30(
+    lat_rad: np.float64,
+    lon_rad: np.float64,
+    ell: Ellipsoid = GRS80
+) -> tuple[np.float64, np.float64, int]:
+    """
+    Proyecta coordenadas geodesicas a UTM Huso 30 Norte (meridiano central -3 deg).
+    Retorna:
+        (Easting, Northing, Zone)
+    """
+    return utm_projection(lat_rad, lon_rad, zone=30, hemisphere="N", ell=ell)
+
+
+def utm_inverse(
+    easting: float | np.float64,
+    northing: float | np.float64,
+    zone: int = 30,
+    hemisphere: str = "N",
+    ell: Ellipsoid = GRS80
+) -> tuple[np.float64, np.float64]:
+    """
+    Convierte coordenadas proyectadas UTM a coordenadas geodésicas (latitud, longitud en radianes).
+    Formulación inversa de Gauss-Krüger / Transversa de Mercator de alta precisión.
+
+    Parámetros:
+        easting: Coordenada Este en metros.
+        northing: Coordenada Norte en metros.
+        zone: Huso UTM (1..60).
+        hemisphere: 'N' o 'S'.
+        ell: Elipsoide de referencia (por defecto GRS80).
+
+    Retorna:
+        (lat_rad, lon_rad): Latitud y longitud geodésicas en radianes.
+    """
+    k0 = np.float64(0.9996)
+    a = ell.a
+    e2 = ell.e2
+    ep2 = ell.ep2
+
+    x = np.float64(easting) - np.float64(500000.0)
+    y = np.float64(northing)
+    if hemisphere.upper() == "S":
+        y -= np.float64(10000000.0)
+    M = y / k0
+
+    e1 = (np.float64(1.0) - np.sqrt(np.float64(1.0) - e2)) / (np.float64(1.0) + np.sqrt(np.float64(1.0) - e2))
+    mu = M / (a * (np.float64(1.0) - e2 / 4.0 - 3.0 * (e2**2) / 64.0 - 5.0 * (e2**3) / 256.0))
+
+    phi1 = mu + (1.5 * e1 - 27.0 * (e1**3) / 32.0) * np.sin(2.0 * mu) \
+              + (21.0 * (e1**2) / 16.0 - 55.0 * (e1**4) / 32.0) * np.sin(4.0 * mu) \
+              + (151.0 * (e1**3) / 96.0) * np.sin(6.0 * mu) \
+              + (1097.0 * (e1**4) / 512.0) * np.sin(8.0 * mu)
+
+    sin_p1 = np.sin(phi1)
+    cos_p1 = np.cos(phi1)
+    tan_p1 = np.tan(phi1)
+
+    nu1 = a / np.sqrt(np.float64(1.0) - e2 * (sin_p1**2))
+    rho1 = a * (np.float64(1.0) - e2) / ((np.float64(1.0) - e2 * (sin_p1**2))**1.5)
+    eta1_2 = ep2 * (cos_p1**2)
+    t1 = tan_p1**2
+    D = x / (nu1 * k0)
+
+    # Latitud
+    term_lat2 = (D**2) / 2.0
+    term_lat4 = ((D**4) / 24.0) * (5.0 + 3.0 * t1 + 10.0 * eta1_2 - 4.0 * (eta1_2**2) - 9.0 * ep2)
+    term_lat6 = ((D**6) / 720.0) * (61.0 + 90.0 * t1 + 298.0 * eta1_2 + 45.0 * (t1**2) - 252.0 * ep2 - 3.0 * (eta1_2**2))
+    lat = phi1 - (nu1 * tan_p1 / rho1) * (term_lat2 - term_lat4 + term_lat6)
+
+    # Longitud
+    lon0_deg = np.float64((zone - 1) * 6 - 180 + 3)
+    lon0_rad = np.radians(lon0_deg)
+    term_lon1 = D
+    term_lon3 = ((D**3) / 6.0) * (1.0 + 2.0 * t1 + eta1_2)
+    term_lon5 = ((D**5) / 120.0) * (5.0 - 2.0 * eta1_2 + 28.0 * t1 - 3.0 * (eta1_2**2) + 8.0 * ep2 + 24.0 * (t1**2))
+    lon = lon0_rad + (term_lon1 - term_lon3 + term_lon5) / cos_p1
+
+    return lat, lon
+
+

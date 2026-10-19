@@ -14,16 +14,17 @@ from PySide6.QtWidgets import (
     QPushButton, QDoubleSpinBox, QComboBox, QWidget, QAbstractSpinBox,
     QGroupBox
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QLocale
 
 from gui.theme import set_window_titlebar_light
 
 
 class BaseToolDialog(QDialog):
-    """Clase base para herramientas flotantes no modales con botón 'Aplicar' permanente."""
+    """Clase base para herramientas flotantes no modales con botón 'Aplicar' permanente y punto decimal C."""
 
     def __init__(self, title: str, parent: Optional[QWidget] = None):
         super().__init__(parent, Qt.Tool | Qt.WindowStaysOnTopHint)
+        self.setLocale(QLocale.c())
         self.setWindowTitle(title)
         self.setModal(False)
         self.setAttribute(Qt.WA_DeleteOnClose, False)
@@ -312,21 +313,21 @@ class ToolDialogSensorMove(BaseToolDialog):
         self.spin_dx = QDoubleSpinBox()
         self.spin_dx.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_dx.setRange(-20.0, 20.0)
-        self.spin_dx.setDecimals(4)
+        self.spin_dx.setDecimals(6)
         self.spin_dx.setValue(0.0)
         form.addRow("ΔXb (Adelante/Atrás):", self.spin_dx)
 
         self.spin_dy = QDoubleSpinBox()
         self.spin_dy.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_dy.setRange(-20.0, 20.0)
-        self.spin_dy.setDecimals(4)
+        self.spin_dy.setDecimals(6)
         self.spin_dy.setValue(0.0)
         form.addRow("ΔYb (Derecha/Izquierda):", self.spin_dy)
 
         self.spin_dz = QDoubleSpinBox()
         self.spin_dz.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_dz.setRange(-20.0, 20.0)
-        self.spin_dz.setDecimals(4)
+        self.spin_dz.setDecimals(6)
         self.spin_dz.setValue(0.0)
         form.addRow("ΔZb (Abajo/Arriba):", self.spin_dz)
 
@@ -399,7 +400,7 @@ class ToolDialogSensorRotate(BaseToolDialog):
         self.spin_a1 = QDoubleSpinBox()
         self.spin_a1.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_a1.setRange(-180.0, 180.0)
-        self.spin_a1.setDecimals(2)
+        self.spin_a1.setDecimals(6)
         self.spin_a1.setValue(0.0)
         self.spin_a1.setSuffix(" °")
         self.lbl_row1 = QLabel("Δα (Eje X):")
@@ -408,7 +409,7 @@ class ToolDialogSensorRotate(BaseToolDialog):
         self.spin_a2 = QDoubleSpinBox()
         self.spin_a2.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_a2.setRange(-180.0, 180.0)
-        self.spin_a2.setDecimals(2)
+        self.spin_a2.setDecimals(6)
         self.spin_a2.setValue(0.0)
         self.spin_a2.setSuffix(" °")
         self.lbl_row2 = QLabel("Δβ (Eje Y):")
@@ -417,7 +418,7 @@ class ToolDialogSensorRotate(BaseToolDialog):
         self.spin_a3 = QDoubleSpinBox()
         self.spin_a3.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_a3.setRange(-180.0, 180.0)
-        self.spin_a3.setDecimals(2)
+        self.spin_a3.setDecimals(6)
         self.spin_a3.setValue(0.0)
         self.spin_a3.setSuffix(" °")
         self.lbl_row3 = QLabel("Δγ (Eje Z):")
