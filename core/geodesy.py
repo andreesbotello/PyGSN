@@ -270,6 +270,40 @@ def utm_projection_huso30(
     return utm_projection(lat_rad, lon_rad, zone=30, hemisphere="N", ell=ell)
 
 
+def utm_meridian_convergence(
+    lat_rad: np.float64 | float,
+    lon_rad: np.float64 | float,
+    zone: int = 30,
+    ell: Ellipsoid = GRS80
+) -> np.float64:
+    """
+    Calcula la convergencia de meridianos gamma (ángulo entre el Norte geográfico y el Norte de cuadrícula UTM)
+    en radianes. Formulación de Gauss-Krüger rigurosa.
+
+    Relación de orientación:
+        Azimut_cuadrícula (psi_grid) = Azimut_geodésico (psi) - gamma
+    """
+    lon0_deg = np.float64((zone - 1) * 6 - 180 + 3)
+    lon0_rad = np.radians(lon0_deg)
+
+    phi = np.float64(lat_rad)
+    dl = np.float64(lon_rad - lon0_rad)
+
+    sin_p = np.sin(phi)
+    cos_p = np.cos(phi)
+    tan_p = np.tan(phi)
+    t2 = tan_p ** 2
+    eta2 = ell.ep2 * (cos_p ** 2)
+
+    # Serie de convergencia de meridianos de Gauss-Krüger
+    c1 = dl * sin_p
+    c3 = (dl**3 / 3.0) * sin_p * (cos_p**2) * (1.0 + 3.0 * eta2 + 2.0 * (eta2**2))
+    c5 = (dl**5 / 15.0) * sin_p * (cos_p**4) * (2.0 - t2)
+
+    gamma = c1 + c3 + c5
+    return np.float64(gamma)
+
+
 def utm_inverse(
     easting: float | np.float64,
     northing: float | np.float64,

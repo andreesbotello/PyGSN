@@ -362,6 +362,10 @@ class DialogReferenceSystemProperties(BaseDialog):
         self.spin_decl.setSuffix(" °")
         form.addRow("Declinación Magnética:", self.spin_decl)
 
+        self.chk_basemap = QCheckBox("Mostrar mapa base (OpenStreetMap)")
+        self.chk_basemap.setChecked(getattr(ref_sys, "show_basemap", True))
+        form.addRow("Visualización:", self.chk_basemap)
+
         layout.addLayout(form)
         layout.addSpacing(6)
 
@@ -386,6 +390,7 @@ class DialogReferenceSystemProperties(BaseDialog):
         self.ref_sys.utm_hemisphere = "N" if self.combo_hemi.currentText() == "Norte" else "S"
         self.ref_sys.geoid_undulation_N = self.spin_geoid.value()
         self.ref_sys.magnetic_declination_deg = self.spin_decl.value()
+        self.ref_sys.show_basemap = self.chk_basemap.isChecked()
 
 
 class DialogCreatePlatform(BaseDialog):

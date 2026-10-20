@@ -23,6 +23,8 @@ from core.project import Project
 from core.georeferencing import solve_multisensor_georeferencing, GeoreferencingSolution
 from gui.dialog_georeferencing import DialogGeoreferencingSolver
 from gui.dialog_attribute_table import DialogAttributeTable
+from gui.canvas_map import CartoMapWidget, CartoMapCanvas
+from gui.app import PyGSNMainWindow
 
 
 class TestGeoreferencingWorkflow(unittest.TestCase):
@@ -542,7 +544,7 @@ class TestGeoreferencingWorkflow(unittest.TestCase):
         )
         proj.add_platform(plat)
 
-        # Crear widget de mapa
+        # Crear widget de mapa (sin toolbar invasiva, limpio)
         map_widget = CartoMapWidget(get_project=lambda: proj, ref_system_id="SRT_TEST")
         self.assertIsNotNone(map_widget)
         self.assertEqual(map_widget.canvas.ref_system_id, "SRT_TEST")
@@ -557,7 +559,7 @@ class TestGeoreferencingWorkflow(unittest.TestCase):
 
         # Probar conmutación de terna n-frame
         self.assertEqual(map_widget.canvas.n_frame_convention, "NED")
-        map_widget.combo_nframe.setCurrentIndex(1)  # ENU
+        map_widget.canvas.n_frame_convention = "ENU"
         self.assertEqual(map_widget.canvas.n_frame_convention, "ENU")
 
         # Probar apertura en PyGSNMainWindow
@@ -571,6 +573,191 @@ class TestGeoreferencingWorkflow(unittest.TestCase):
         # Si se vuelve a solicitar, no duplica pestaña
         win.open_reference_system_map("SRT_TEST")
         self.assertEqual(win.workspace.count(), 1)
+
+    def test_platform_utm_bounding_box(self):
+        """Valida el cálculo riguroso de la Bounding Box orientada al Norte cartográfico."""
+        plat = Platform(id="PLA_TEST", name="Vehículo Test", length_m=4.0, width_m=2.0)
+        plat.pose_e = PlatformPose(
+            ref_system_id="SRT_TEST",
+            utm_easting_m=725450.0,
+            utm_northing_m=4372850.0,
+            utm_zone=30,
+            utm_hemisphere="N",
+            attitude_rpy_deg=(0.0, 0.0, 0.0), # Rumbo Norte exacto
+        )
+        plat.add_sensor(Sensor(code="S1", name="Sensor 1", lever_arm_b=np.array([2.5, 0.0, 0.0])))
+
+        bbox = plat.get_utm_bounding_box()
+        self.assertIsNotNone(bbox)
+        # Con rumbo 0 (Norte), Xb apunta hacia Norte y Yb hacia Este
+        # Chasis: Xb in [-2, 2], Yb in [-1, 1] -> N in [4372848, 4372852], E in [725449, 725451]
+        # Sensor S1: Xb=2.5, Yb=0 -> N=4372852.5, E=725450
+        self.assertAlmostEqual(bbox["min_e"], 725449.0, places=3)
+        self.assertAlmostEqual(bbox["max_e"], 725451.0, places=3)
+        self.assertAlmostEqual(bbox["min_n"], 4372848.0, places=3)
+        self.assertAlmostEqual(bbox["max_n"], 4372852.5, places=3)
+        self.assertAlmostEqual(bbox["span_e"], 2.0, places=3)
+        self.assertAlmostEqual(bbox["span_n"], 4.5, places=3)
+
+    def test_carto_map_context_menu_and_layer_visibility(self):
+        """Valida el menú contextual del mapa y el control reactivo de visibilidad de capas."""
+        proj = Project(name="Test Visibility", platforms={})
+        srt = ReferenceSystem(id="SRT_1", name="ETRS89 / UTM 30N", show_basemap=True)
+        proj.add_reference_system(srt)
+
+        map_widget = CartoMapWidget(get_project=lambda: proj, ref_system_id="SRT_1")
+        canvas = map_widget.canvas
+
+        # Elementos auxiliares del lienzo por defecto visibles
+        self.assertTrue(canvas.show_compass)
+        self.assertTrue(canvas.show_grid)
+        self.assertTrue(canvas.show_osm)
+        self.assertTrue(canvas.show_scalebar)
+
+        # Conmutación mediante métodos contextuales
+        canvas._toggle_compass(False)
+        self.assertFalse(canvas.show_compass)
+        canvas._toggle_grid(False)
+        self.assertFalse(canvas.show_grid)
+        canvas._toggle_osm(False)
+        self.assertFalse(canvas.show_osm)
+        canvas._toggle_scalebar(False)
+        self.assertFalse(canvas.show_scalebar)
+
+        # Control de capas desde dock de jerarquía
+        map_widget.set_layer_visibility("basemap", False)
+        self.assertIn("basemap", canvas.hidden_layers)
+        self.assertFalse(canvas.show_osm)
+
+        map_widget.set_layer_visibility("basemap", True)
+        self.assertNotIn("basemap", canvas.hidden_layers)
+        self.assertTrue(canvas.show_osm)
+
+    def test_hierarchy_dock_srt_layer_tree(self):
+        """Valida la estructuración del árbol de capas en el e-frame (SRT) con subcapas checkables."""
+        from gui.dock_hierarchy import HierarchyDock
+        from PySide6.QtCore import Qt
+
+        proj = Project(name="Test Dock", platforms={})
+        srt = ReferenceSystem(id="SRT_TEST", name="ETRS89 / UTM 30N")
+        proj.add_reference_system(srt)
+
+        plat = Platform(id="PLA1", name="Rover 1", length_m=2.0, width_m=1.0)
+        plat.pose_e = PlatformPose(ref_system_id="SRT_TEST", utm_easting_m=725000.0, utm_northing_m=4370000.0)
+        plat.add_sensor(Sensor(code="REC2", name="Antena GNSS", sensor_type=SensorType.GNSS))
+        proj.add_platform(plat)
+
+        dock = HierarchyDock(get_project=lambda: proj, on_project_changed=lambda: None)
+        dock.rebuild_tree()
+
+        # Localizar el nodo de SRT_TEST en el árbol
+        root = dock.tree.topLevelItem(0)
+        srts_group = root.child(1) # Rama 2: Sistemas de Referencia
+        srt_item = srts_group.child(0)
+
+        # Debe tener 2 hijos: Mapa Base y Plataforma PLA1
+        self.assertEqual(srt_item.childCount(), 2)
+        basemap_node = srt_item.child(0)
+        self.assertEqual(basemap_node.text(0), "Mapa Base (OpenStreetMap)")
+        self.assertEqual(basemap_node.checkState(0), Qt.Checked)
+
+        plat_node = srt_item.child(1)
+        self.assertIn("Rover 1", plat_node.text(0))
+        self.assertEqual(plat_node.checkState(0), Qt.Checked)
+
+        # Subhijos de la plataforma: Chasis, Sensores, Terna n-frame
+        self.assertEqual(plat_node.childCount(), 3)
+        self.assertIn("Chasis", plat_node.child(0).text(0))
+        self.assertIn("Sensores", plat_node.child(1).text(0))
+        self.assertIn("Terna n-frame", plat_node.child(2).text(0))
+
+
+    def test_utm_meridian_convergence_and_heading_grid(self):
+        """Valida la formulación rigurosa de convergencia de meridianos UTM y rumbo de cuadrícula."""
+        from core.geodesy import utm_meridian_convergence
+        import math
+
+        lat_rad = math.radians(39.481426)
+        lon_rad = math.radians(-0.335458)
+        gamma_rad = utm_meridian_convergence(lat_rad, lon_rad, zone=30)
+        gamma_deg = math.degrees(gamma_rad)
+
+        # Para Huso 30 (meridiano central -3°), en lon=-0.335°, delta_lon = +2.665°
+        # gamma ≈ delta_lon * sin(phi) = 2.665° * sin(39.48°) ≈ 1.694°
+        self.assertAlmostEqual(gamma_deg, 1.6949, places=3)
+
+        pose = PlatformPose(
+            ref_system_id="SRT_01",
+            utm_easting_m=729171.0,
+            utm_northing_m=4373592.0,
+            lat_deg=39.481426,
+            lon_deg=-0.335458,
+            utm_zone=30,
+            attitude_rpy_deg=(0.0, 0.0, 112.27466)
+        )
+        self.assertAlmostEqual(pose.convergence_deg, 1.6949, places=3)
+        # El rumbo sobre la cuadrícula debe ser exactamente yaw_deg - gamma_deg ≈ 110.58°
+        heading_grid = pose.yaw_deg - pose.convergence_deg
+        self.assertAlmostEqual(heading_grid, 110.5797, places=3)
+
+    def test_canvas_map_drawing_robustness(self):
+        """Verifica que todas las rutinas vectoriales del mapa se ejecuten sin excepciones."""
+        from PySide6.QtGui import QImage, QPainter
+
+        proj = Project(name="Test Render", platforms={})
+        plat = Platform(id="PLAT_01", name="PLA1", length_m=2.0, width_m=1.0)
+        plat.pose_e = PlatformPose(
+            ref_system_id="SRT_01",
+            utm_easting_m=729171.0,
+            utm_northing_m=4373592.0,
+            attitude_rpy_deg=(0.0, 0.0, 110.0)
+        )
+        plat.add_sensor(Sensor(code="REC2", name="Antena", sensor_type=SensorType.GNSS))
+        proj.add_platform(plat)
+
+        canvas = CartoMapCanvas(get_project=lambda: proj, ref_system_id="SRT_01")
+        canvas.resize(400, 300)
+
+        img = QImage(400, 300, QImage.Format_ARGB32)
+        p = QPainter(img)
+
+        # Comprobar que ninguna rutina lanza errores ni interrumpe el ciclo
+        canvas._draw_utm_grid(p)
+        canvas._draw_platforms(p)
+        canvas._draw_sensors(p)
+        canvas._draw_n_frame_triad(p)
+        canvas._draw_compass_rose(p)
+        canvas._draw_scale_bar(p)
+        p.end()
+
+        # Comprobar convención ENU
+        canvas.n_frame_convention = "ENU"
+        p2 = QPainter(img)
+        canvas._draw_n_frame_triad(p2)
+        p2.end()
+
+    def test_hierarchy_dock_basemap_sync_method(self):
+        """Valida que set_basemap_checked actualice el árbol sin bucles infinitos."""
+        from gui.dock_hierarchy import HierarchyDock
+        from PySide6.QtCore import Qt
+
+        proj = Project(name="Test Sync", platforms={})
+        srt = ReferenceSystem(id="SRT_SYNC", name="ETRS89 / UTM 30N")
+        proj.add_reference_system(srt)
+
+        dock = HierarchyDock(get_project=lambda: proj, on_project_changed=lambda: None)
+        dock.rebuild_tree()
+
+        # Llamar a set_basemap_checked para False y True
+        dock.set_basemap_checked("SRT_SYNC", False)
+        root = dock.tree.topLevelItem(0)
+        srts_group = root.child(1)
+        srt_node = srts_group.child(0)
+        basemap_node = srt_node.child(0)
+        self.assertEqual(basemap_node.checkState(0), Qt.Unchecked)
+
+        dock.set_basemap_checked("SRT_SYNC", True)
+        self.assertEqual(basemap_node.checkState(0), Qt.Checked)
 
 
 if __name__ == "__main__":

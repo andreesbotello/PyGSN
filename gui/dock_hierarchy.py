@@ -49,6 +49,9 @@ class HierarchyDock(QDockWidget):
     reference_system_map_requested = Signal(str)       # rs_id
     reference_system_properties_requested = Signal(str)# rs_id
     delete_reference_system_requested = Signal(str)    # rs_id
+    platform_zoom_map_requested = Signal(str, str)     # plat_id, rs_id
+    layer_visibility_changed = Signal(str, str, bool)   # rs_id, layer_key, is_visible
+    n_frame_convention_changed = Signal(str, str)       # rs_id, convention
 
     def __init__(
         self,
@@ -77,6 +80,7 @@ class HierarchyDock(QDockWidget):
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.itemClicked.connect(self._on_item_clicked)
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self.tree.itemChanged.connect(self._on_tree_item_changed)
 
         layout.addWidget(self.tree)
         self.setWidget(widget)
@@ -89,6 +93,7 @@ class HierarchyDock(QDockWidget):
 
     def rebuild_tree(self):
         """Reconstruye el árbol de capas jerárquico: Proyecto -> Plataformas / Sistemas de Referencia -> Sensores."""
+        self.tree.blockSignals(True)
         self.tree.clear()
         proj = self.get_project()
 
@@ -223,9 +228,74 @@ class HierarchyDock(QDockWidget):
                     rs_item.setIcon(0, QIcon(str(icon_srt)))
                 rs_item.setForeground(0, QColor(16, 120, 80))
 
+                # Subcapa 1: Mapa Base (OpenStreetMap) con checkbox
+                basemap_item = QTreeWidgetItem(rs_item, ["Mapa Base (OpenStreetMap)"])
+                basemap_item.setData(0, Qt.UserRole, {"type": "srt_basemap", "rs_id": rs_id})
+                basemap_item.setFlags(basemap_item.flags() | Qt.ItemIsUserCheckable)
+                basemap_item.setCheckState(0, Qt.Checked if getattr(rs, "show_basemap", True) else Qt.Unchecked)
+                basemap_item.setForeground(0, QColor(71, 85, 105))
+
+                # Subcapas de plataformas georreferenciadas bajo este SRT
+                for plat_id, plat in proj.platforms.items():
+                    if plat.pose_e and plat.pose_e.ref_system_id == rs_id:
+                        s_plat_item = QTreeWidgetItem(rs_item, [f"Plataforma: {plat.name} (Georreferenciada)"])
+                        s_plat_item.setData(0, Qt.UserRole, {"type": "srt_platform", "rs_id": rs_id, "plat_id": plat_id})
+                        s_plat_item.setFlags(s_plat_item.flags() | Qt.ItemIsUserCheckable)
+                        s_plat_item.setCheckState(0, Qt.Checked)
+                        if icon_dron.exists():
+                            s_plat_item.setIcon(0, QIcon(str(icon_dron)))
+                        s_plat_item.setForeground(0, QColor(2, 132, 199))
+
+                        # Chasis
+                        dim_str = f"({plat.length_m:.2f}x{plat.width_m:.2f}m)" if plat.has_dimensions else ""
+                        ch_item = QTreeWidgetItem(s_plat_item, [f"Chasis {dim_str}".strip()])
+                        ch_item.setData(0, Qt.UserRole, {"type": "srt_chassis", "rs_id": rs_id, "plat_id": plat_id})
+                        ch_item.setFlags(ch_item.flags() | Qt.ItemIsUserCheckable)
+                        ch_item.setCheckState(0, Qt.Checked)
+                        if icon_chasis.exists():
+                            ch_item.setIcon(0, QIcon(str(icon_chasis)))
+                        ch_item.setForeground(0, QColor(71, 85, 105))
+
+                        # Sensores
+                        sens_group_item = QTreeWidgetItem(s_plat_item, [f"Sensores ({len(plat.sensors)})"])
+                        sens_group_item.setData(0, Qt.UserRole, {"type": "srt_sensors_group", "rs_id": rs_id, "plat_id": plat_id})
+                        sens_group_item.setFlags(sens_group_item.flags() | Qt.ItemIsUserCheckable)
+                        sens_group_item.setCheckState(0, Qt.Checked)
+                        if icon_sensor.exists():
+                            sens_group_item.setIcon(0, QIcon(str(icon_sensor)))
+                        sens_group_item.setForeground(0, QColor(71, 85, 105))
+
+                        for scode, s in plat.sensors.items():
+                            stag = f"[{s.sensor_type.value[:3]}]"
+                            s_node = QTreeWidgetItem(sens_group_item, [f"{s.name} {stag}"])
+                            s_node.setData(0, Qt.UserRole, {"type": "srt_sensor", "rs_id": rs_id, "plat_id": plat_id, "code": scode})
+                            s_node.setFlags(s_node.flags() | Qt.ItemIsUserCheckable)
+                            s_node.setCheckState(0, Qt.Checked)
+                            stype_name = s.sensor_type.value
+                            if "GNSS" in stype_name and icon_gps.exists():
+                                s_node.setIcon(0, QIcon(str(icon_gps)))
+                            elif "CAM" in stype_name and icon_camara.exists():
+                                s_node.setIcon(0, QIcon(str(icon_camara)))
+                            elif icon_sensor.exists():
+                                s_node.setIcon(0, QIcon(str(icon_sensor)))
+                            s_node.setForeground(0, QColor(71, 85, 105))
+
+                        # Terna n-frame
+                        nframe_item = QTreeWidgetItem(s_plat_item, ["Terna n-frame"])
+                        nframe_item.setData(0, Qt.UserRole, {"type": "srt_n_frame", "rs_id": rs_id, "plat_id": plat_id})
+                        nframe_item.setFlags(nframe_item.flags() | Qt.ItemIsUserCheckable)
+                        nframe_item.setCheckState(0, Qt.Checked)
+                        nframe_item.setForeground(0, QColor(71, 85, 105))
+
+                        s_plat_item.setExpanded(True)
+                        sens_group_item.setExpanded(True)
+
+                rs_item.setExpanded(True)
+
         plat_group.setExpanded(True)
         srts_group.setExpanded(True)
         root.setExpanded(True)
+        self.tree.blockSignals(False)
 
     def _on_item_clicked(self, item: QTreeWidgetItem, column: int):
         data = item.data(0, Qt.UserRole)
@@ -256,10 +326,56 @@ class HierarchyDock(QDockWidget):
         itype = data.get("type")
         plat_id = data.get("plat_id")
         rs_id = data.get("rs_id")
-        if plat_id:
+        if itype in ("srt_platform", "srt_chassis", "srt_sensors_group", "srt_sensor", "srt_n_frame") and plat_id and rs_id:
+            self.platform_zoom_map_requested.emit(plat_id, rs_id)
+        elif plat_id:
             self.platform_activated.emit(plat_id)
         elif itype == "reference_system" and rs_id:
             self.reference_system_map_requested.emit(rs_id)
+
+    def _on_tree_item_changed(self, item: QTreeWidgetItem, column: int):
+        data = item.data(0, Qt.UserRole)
+        if not data:
+            return
+        itype = data.get("type")
+        rs_id = data.get("rs_id")
+        is_checked = (item.checkState(0) == Qt.Checked)
+
+        if itype == "srt_basemap" and rs_id:
+            proj = self.get_project()
+            rs = proj.reference_systems.get(rs_id)
+            if rs:
+                rs.show_basemap = is_checked
+            self.layer_visibility_changed.emit(rs_id, "basemap", is_checked)
+
+        elif itype == "srt_platform" and rs_id:
+            plat_id = data.get("plat_id")
+            self.layer_visibility_changed.emit(rs_id, f"plat_{plat_id}", is_checked)
+            self.tree.blockSignals(True)
+            for i in range(item.childCount()):
+                item.child(i).setCheckState(0, item.checkState(0))
+            self.tree.blockSignals(False)
+
+        elif itype == "srt_chassis" and rs_id:
+            plat_id = data.get("plat_id")
+            self.layer_visibility_changed.emit(rs_id, f"chassis_{plat_id}", is_checked)
+
+        elif itype == "srt_sensors_group" and rs_id:
+            plat_id = data.get("plat_id")
+            self.layer_visibility_changed.emit(rs_id, f"sensors_{plat_id}", is_checked)
+            self.tree.blockSignals(True)
+            for i in range(item.childCount()):
+                item.child(i).setCheckState(0, item.checkState(0))
+            self.tree.blockSignals(False)
+
+        elif itype == "srt_sensor" and rs_id:
+            plat_id = data.get("plat_id")
+            code = data.get("code")
+            self.layer_visibility_changed.emit(rs_id, f"sensor_{plat_id}_{code}", is_checked)
+
+        elif itype == "srt_n_frame" and rs_id:
+            plat_id = data.get("plat_id")
+            self.layer_visibility_changed.emit(rs_id, f"n_frame_{plat_id}", is_checked)
 
     def _on_context_menu(self, pos):
         item = self.tree.itemAt(pos)
@@ -299,6 +415,19 @@ class HierarchyDock(QDockWidget):
             menu.addSeparator()
             act_del_rs = menu.addAction("Eliminar")
             act_del_rs.triggered.connect(lambda: self.delete_reference_system_requested.emit(rs_id))
+
+        elif itype == "srt_platform" and plat_id:
+            act_zoom_plat = menu.addAction("Hacer Zoom a Plataforma")
+            act_zoom_plat.triggered.connect(lambda: self.platform_zoom_map_requested.emit(plat_id, rs_id))
+            menu.addSeparator()
+            act_attr = menu.addAction("Tabla de Atributos (F6)")
+            act_attr.triggered.connect(lambda: self.platform_attribute_table_requested.emit(plat_id))
+
+        elif itype == "srt_n_frame" and plat_id:
+            act_ned = menu.addAction("Convención: NED (Inercial GSN)")
+            act_ned.triggered.connect(lambda: self.n_frame_convention_changed.emit(rs_id, "NED"))
+            act_enu = menu.addAction("Convención: ENU (Topocéntrico GeoTop)")
+            act_enu.triggered.connect(lambda: self.n_frame_convention_changed.emit(rs_id, "ENU"))
 
         elif itype == "platform" and plat_id:
             act_open = menu.addAction("Abrir Workspace")
@@ -419,3 +548,18 @@ class HierarchyDock(QDockWidget):
                 item.setSelected(True)
                 return
             it += 1
+
+    def set_basemap_checked(self, rs_id: str, checked: bool):
+        """Actualiza el estado de la casilla del mapa base bajo el SRT indicado sin disparar bucle de señales."""
+        it = QTreeWidgetItemIterator(self.tree)
+        self.tree.blockSignals(True)
+        try:
+            while it.value():
+                item = it.value()
+                data = item.data(0, Qt.UserRole)
+                if data and data.get("type") == "srt_basemap" and data.get("rs_id") == rs_id:
+                    item.setCheckState(0, Qt.Checked if checked else Qt.Unchecked)
+                    break
+                it += 1
+        finally:
+            self.tree.blockSignals(False)
