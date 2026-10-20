@@ -147,6 +147,9 @@ class PyGSNMainWindow(QMainWindow):
         self.hierarchy_dock.reference_system_map_requested.connect(self.open_reference_system_map)
         self.hierarchy_dock.reference_system_properties_requested.connect(self.action_reference_system_properties)
         self.hierarchy_dock.delete_reference_system_requested.connect(self.action_delete_reference_system)
+        self.hierarchy_dock.platform_zoom_map_requested.connect(self.action_zoom_platform_in_map)
+        self.hierarchy_dock.layer_visibility_changed.connect(self._on_layer_visibility_changed)
+        self.hierarchy_dock.n_frame_convention_changed.connect(self._on_n_frame_convention_changed)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.hierarchy_dock)
 
         # Dock Derecho: Consola CLI (oculta por defecto)
@@ -1119,10 +1122,40 @@ class PyGSNMainWindow(QMainWindow):
             ref_system_id=rs_id,
             parent=self
         )
+        map_widget.basemap_visibility_changed.connect(self._on_map_basemap_visibility_changed)
         self.map_canvases[rs_id] = map_widget
         idx = self.workspace.addTab(map_widget, tab_title)
         self.workspace.setCurrentIndex(idx)
         self.lbl_status_state.setText(f"[Mapa] Vista cartográfica e-frame activada ({rs.name})")
+
+    def _on_map_basemap_visibility_changed(self, rs_id: str, visible: bool):
+        """Sincroniza el cambio de visibilidad del mapa base hacia el árbol de capas y el modelo."""
+        rs = self.project.reference_systems.get(rs_id)
+        if rs:
+            rs.show_basemap = visible
+        self.hierarchy_dock.set_basemap_checked(rs_id, visible)
+
+    def action_zoom_platform_in_map(self, plat_id: str, rs_id: str):
+        """Abre o enfoca la pestaña de mapa del SRT y encuadra la plataforma georreferenciada."""
+        self.open_reference_system_map(rs_id)
+        map_widget = self.map_canvases.get(rs_id)
+        if map_widget:
+            map_widget.zoom_to_platform(plat_id)
+            self.lbl_status_state.setText(f"[Mapa] Zoom encuadrado a plataforma {plat_id}")
+
+    def _on_layer_visibility_changed(self, rs_id: str, layer_key: str, visible: bool):
+        """Propaga cambios de visibilidad de capas desde el árbol al mapa cartográfico."""
+        map_widget = self.map_canvases.get(rs_id)
+        if map_widget:
+            map_widget.set_layer_visibility(layer_key, visible)
+
+    def _on_n_frame_convention_changed(self, rs_id: str, convention: str):
+        """Actualiza la convención de la terna local de navegación (NED o ENU)."""
+        map_widget = self.map_canvases.get(rs_id)
+        if map_widget:
+            map_widget.canvas.n_frame_convention = convention
+            map_widget.canvas.update()
+            self.lbl_status_state.setText(f"[Mapa] Convención n-frame establecida en {convention}")
 
     def _on_canvas_sensor_placed(self, plat_id: str, code: str, x: float, y: float, z: float):
         if self.editing_target_type == "SENSOR" and self.editing_platform_id == plat_id:

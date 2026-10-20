@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QPoint, QPointF, QRectF, QSize, Signal, QObject
 from PySide6.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QPixmap, QImage,
-    QPolygonF, QCursor
+    QPolygonF, QCursor, QTransform, QGuiApplication, QPainterPath
 )
 
 from core.models import Platform, Sensor, ReferenceSystem
@@ -110,6 +110,7 @@ class CartoMapCanvas(QWidget):
     marcadores de sensores y terna local de navegación n-frame.
     """
     coordinates_changed = Signal(float, float, float, float)  # Easting, Northing, Lat_deg, Lon_deg
+    basemap_visibility_changed = Signal(str, bool)             # ref_system_id, visible
 
     def __init__(
         self,
@@ -131,11 +132,18 @@ class CartoMapCanvas(QWidget):
         self.px_per_m = 12.0
 
         # Estados de capas visibles
-        self.show_osm = True
+        proj = self.get_project()
+        rs = proj.reference_systems.get(self.ref_system_id)
+        self.show_osm = getattr(rs, "show_basemap", True) if rs else True
         self.show_chassis = True
         self.show_sensors = True
         self.show_n_frame = True
         self.show_grid = True
+        self.show_compass = True
+        self.show_scalebar = True
+        self.hidden_layers: set[str] = set()
+        if not self.show_osm:
+            self.hidden_layers.add("basemap")
         self.n_frame_convention = "NED"  # "NED" o "ENU"
 
         # Interacción
@@ -155,7 +163,7 @@ class CartoMapCanvas(QWidget):
         self.zoom_to_platforms()
 
     def _on_tile_downloaded(self, z: int, x: int, y: int):
-        if self.show_osm:
+        if self.show_osm and "basemap" not in self.hidden_layers:
             self.update()
 
     def set_ref_system_id(self, rs_id: str):
@@ -210,6 +218,86 @@ class CartoMapCanvas(QWidget):
     def zoom_to_fit_extent(self):
         """Encuadre general que abarca todas las plataformas y sensores."""
         self.zoom_to_platforms()
+
+    def zoom_to_bbox(self, min_e: float, max_e: float, min_n: float, max_n: float, margin: float = 0.35):
+        """Encuadra la vista en la bounding box métrica [min_e, max_e, min_n, max_n] con margen de seguridad."""
+        self.center_e = (min_e + max_e) / 2.0
+        self.center_n = (min_n + max_n) / 2.0
+        span_e = max(abs(max_e - min_e), 2.0)
+        span_n = max(abs(max_n - min_n), 2.0)
+
+        w = max(self.width() - 80, 200)
+        h = max(self.height() - 80, 200)
+        scale_e = (w / span_e) * (1.0 - margin)
+        scale_n = (h / span_n) * (1.0 - margin)
+        self.px_per_m = float(np.clip(min(scale_e, scale_n), 0.05, 500.0))
+        self.update()
+
+    def contextMenuEvent(self, event):
+        """Menú contextual emergente de clic derecho directamente en el lienzo del mapa."""
+        menu = QMenu(self)
+
+        act_compass = menu.addAction("Ver rosa de los vientos")
+        act_compass.setCheckable(True)
+        act_compass.setChecked(self.show_compass)
+        act_compass.toggled.connect(self._toggle_compass)
+
+        act_grid = menu.addAction("Ver cuadrícula métrica (UTM)")
+        act_grid.setCheckable(True)
+        act_grid.setChecked(self.show_grid and ("grid" not in self.hidden_layers))
+        act_grid.toggled.connect(self._toggle_grid)
+
+        act_osm = menu.addAction("Ver mapa base (OpenStreetMap)")
+        act_osm.setCheckable(True)
+        act_osm.setChecked(self.show_osm and ("basemap" not in self.hidden_layers))
+        act_osm.toggled.connect(self._toggle_osm)
+
+        act_scale = menu.addAction("Ver escala gráfica")
+        act_scale.setCheckable(True)
+        act_scale.setChecked(self.show_scalebar)
+        act_scale.toggled.connect(self._toggle_scalebar)
+
+        menu.addSeparator()
+
+        act_center = menu.addAction("Centrar vista en plataforma")
+        act_center.triggered.connect(self.zoom_to_platforms)
+
+        act_copy = menu.addAction("Copiar coordenadas UTM al portapapeles")
+        cur_pos = event.pos()
+        e, n = self.screen_to_utm(cur_pos.x(), cur_pos.y())
+        act_copy.triggered.connect(lambda: self._copy_coordinates(e, n))
+
+        menu.exec(event.globalPos())
+
+    def _toggle_compass(self, checked: bool):
+        self.show_compass = checked
+        self.update()
+
+    def _toggle_grid(self, checked: bool):
+        self.show_grid = checked
+        if checked:
+            self.hidden_layers.discard("grid")
+        else:
+            self.hidden_layers.add("grid")
+        self.update()
+
+    def _toggle_osm(self, checked: bool):
+        self.show_osm = checked
+        if checked:
+            self.hidden_layers.discard("basemap")
+        else:
+            self.hidden_layers.add("basemap")
+        self.basemap_visibility_changed.emit(self.ref_system_id, checked)
+        self.update()
+
+    def _toggle_scalebar(self, checked: bool):
+        self.show_scalebar = checked
+        self.update()
+
+    def _copy_coordinates(self, easting: float, northing: float):
+        clipboard = QGuiApplication.clipboard()
+        if clipboard:
+            clipboard.setText(f"E: {easting:,.3f} m, N: {northing:,.3f} m")
 
     # =========================================================================
     # EVENTOS DE RATÓN Y TECLADO
@@ -281,47 +369,71 @@ class CartoMapCanvas(QWidget):
 
         # 1. Capa OpenStreetMap
         if self.show_osm:
-            self._draw_osm_tiles(painter)
+            try:
+                self._draw_osm_tiles(painter)
+            except Exception:
+                pass
 
         # 2. Capa Cuadrícula UTM
         if self.show_grid:
-            self._draw_utm_grid(painter)
+            try:
+                self._draw_utm_grid(painter)
+            except Exception:
+                pass
 
         # 3. Plataformas georreferenciadas
         if self.show_chassis:
-            self._draw_platforms(painter)
+            try:
+                self._draw_platforms(painter)
+            except Exception:
+                pass
 
         # 4. Sensores georreferenciados
         if self.show_sensors:
-            self._draw_sensors(painter)
+            try:
+                self._draw_sensors(painter)
+            except Exception:
+                pass
 
         # 5. Terna local de navegación n-frame
         if self.show_n_frame:
-            self._draw_n_frame_triad(painter)
+            try:
+                self._draw_n_frame_triad(painter)
+            except Exception:
+                pass
 
         # 6. Elementos cartográficos fijos (Rosa de los Vientos y Escala)
-        self._draw_compass_rose(painter)
-        self._draw_scale_bar(painter)
+        try:
+            self._draw_compass_rose(painter)
+        except Exception:
+            pass
+        try:
+            self._draw_scale_bar(painter)
+        except Exception:
+            pass
 
     def _draw_osm_tiles(self, painter: QPainter):
-        """Calcula el rango de teselas OSM visibles, las proyecta en pantalla y las dibuja."""
+        """Calcula el rango de teselas OSM visibles, las proyecta con QTransform.quadToQuad continuo y las dibuja."""
+        if not self.show_osm or "basemap" in self.hidden_layers:
+            return
+
         w = self.width()
         h = self.height()
 
-        # Esquinas visibles en UTM
-        min_e, max_n = self.screen_to_utm(0, 0)
-        max_e, min_n = self.screen_to_utm(w, h)
+        # Calcular las 4 esquinas de la ventana de visualización en UTM
+        corners_screen = [(0, 0), (w, 0), (w, h), (0, h)]
+        lats = []
+        lons = []
+        for sx, sy in corners_screen:
+            e, n = self.screen_to_utm(sx, sy)
+            try:
+                lat_rad, lon_rad = utm_inverse(e, n, zone=30, hemisphere="N", ell=GRS80)
+                lats.append(math.degrees(lat_rad))
+                lons.append(math.degrees(lon_rad))
+            except Exception:
+                return
 
-        try:
-            lat_tl_rad, lon_tl_rad = utm_inverse(min_e, max_n, zone=30, hemisphere="N", ell=GRS80)
-            lat_br_rad, lon_br_rad = utm_inverse(max_e, min_n, zone=30, hemisphere="N", ell=GRS80)
-            lat_tl, lon_tl = math.degrees(lat_tl_rad), math.degrees(lon_tl_rad)
-            lat_br, lon_br = math.degrees(lat_br_rad), math.degrees(lon_br_rad)
-        except Exception:
-            return
-
-        # Nivel de zoom OSM según px_per_m y latitud media
-        mid_lat = (lat_tl + lat_br) / 2.0
+        mid_lat = sum(lats) / 4.0
         cos_lat = max(math.cos(math.radians(mid_lat)), 0.01)
         target_z = math.log2(max(156543.03 * cos_lat * self.px_per_m, 1.0))
         z = int(np.clip(round(target_z), 0, 19))
@@ -340,46 +452,76 @@ class CartoMapCanvas(QWidget):
             lat_deg = math.degrees(lat_rad)
             return lat_deg, lon_deg
 
-        x_min_f, y_min_f = deg2tile(lat_tl, lon_tl, z)
-        x_max_f, y_max_f = deg2tile(lat_br, lon_br, z)
+        # Determinar rango de teselas a partir de las esquinas
+        xtiles = []
+        ytiles = []
+        for lat_d, lon_d in zip(lats, lons):
+            xt, yt = deg2tile(lat_d, lon_d, z)
+            xtiles.append(xt)
+            ytiles.append(yt)
 
-        x_start = max(int(math.floor(min(x_min_f, x_max_f))), 0)
-        x_end = min(int(math.ceil(max(x_min_f, x_max_f))), 2**z)
-        y_start = max(int(math.floor(min(y_min_f, y_max_f))), 0)
-        y_end = min(int(math.ceil(max(y_min_f, y_max_f))), 2**z)
+        # Margen de 1 tesela para asegurar cobertura completa en las esquinas rotadas
+        x_start = max(int(math.floor(min(xtiles))) - 1, 0)
+        x_end = min(int(math.ceil(max(xtiles))) + 1, 2**z)
+        y_start = max(int(math.floor(min(ytiles))) - 1, 0)
+        y_end = min(int(math.ceil(max(ytiles))) + 1, 2**z)
 
         if (x_end - x_start) * (y_end - y_start) > 64:
             return
 
         painter.save()
         painter.setOpacity(0.85)
+        base_transform = painter.transform()
+        src_quad = QPolygonF([QPointF(0, 0), QPointF(256, 0), QPointF(256, 256), QPointF(0, 256)])
 
         for tx in range(x_start, x_end):
             for ty in range(y_start, y_end):
                 pix = self.tile_mgr.get_tile(z, tx, ty)
-                t_lat_top, t_lon_left = tile2deg(tx, ty, z)
-                t_lat_bot, t_lon_right = tile2deg(tx + 1, ty + 1, z)
+                if not pix or pix.isNull():
+                    continue
+
+                # Coordenadas geodésicas de las 4 esquinas de la tesela
+                lat_top, lon_left = tile2deg(tx, ty, z)
+                lat_top_r, lon_right = tile2deg(tx + 1, ty, z)
+                lat_bot_r, lon_right_b = tile2deg(tx + 1, ty + 1, z)
+                lat_bot, lon_left_b = tile2deg(tx, ty + 1, z)
 
                 try:
-                    e_left, n_top, _ = utm_projection(math.radians(t_lat_top), math.radians(t_lon_left), zone=30, hemisphere="N")
-                    e_right, n_bot, _ = utm_projection(math.radians(t_lat_bot), math.radians(t_lon_right), zone=30, hemisphere="N")
-                    sx_left, sy_top = self.utm_to_screen(e_left, n_top)
-                    sx_right, sy_bot = self.utm_to_screen(e_right, n_bot)
+                    e_tl, n_tl, _ = utm_projection(math.radians(lat_top), math.radians(lon_left), zone=30, hemisphere="N")
+                    e_tr, n_tr, _ = utm_projection(math.radians(lat_top_r), math.radians(lon_right), zone=30, hemisphere="N")
+                    e_br, n_br, _ = utm_projection(math.radians(lat_bot_r), math.radians(lon_right_b), zone=30, hemisphere="N")
+                    e_bl, n_bl, _ = utm_projection(math.radians(lat_bot), math.radians(lon_left_b), zone=30, hemisphere="N")
 
-                    rect = QRectF(sx_left, sy_top, sx_right - sx_left, sy_bot - sy_top)
-                    if pix and not pix.isNull():
-                        painter.drawPixmap(rect.toRect(), pix)
+                    sx_tl, sy_tl = self.utm_to_screen(e_tl, n_tl)
+                    sx_tr, sy_tr = self.utm_to_screen(e_tr, n_tr)
+                    sx_br, sy_br = self.utm_to_screen(e_br, n_br)
+                    sx_bl, sy_bl = self.utm_to_screen(e_bl, n_bl)
+
+                    dst_quad = QPolygonF([
+                        QPointF(sx_tl, sy_tl),
+                        QPointF(sx_tr, sy_tr),
+                        QPointF(sx_br, sy_br),
+                        QPointF(sx_bl, sy_bl)
+                    ])
+
+                    trans = QTransform()
+                    if QTransform.quadToQuad(src_quad, dst_quad, trans):
+                        painter.setTransform(trans * base_transform)
+                        painter.drawPixmap(0, 0, pix)
                 except Exception:
                     continue
 
+        painter.setTransform(base_transform)
         painter.restore()
 
     def _draw_utm_grid(self, painter: QPainter):
         """Dibuja una cuadrícula cartográfica métrica UTM adaptativa con cruces y cotas."""
+        if not self.show_grid or "grid" in self.hidden_layers:
+            return
         w = self.width()
         h = self.height()
 
-        target_grid_px = 100.0
+        target_grid_px = 140.0
         step_m_raw = target_grid_px / max(self.px_per_m, 1e-6)
 
         magnitude = 10.0 ** math.floor(math.log10(step_m_raw))
@@ -393,6 +535,16 @@ class CartoMapCanvas(QWidget):
         else:
             step_m = 10.0 * magnitude
 
+        # Formato numérico adaptativo para no repetir enteros cuando step_m < 1 m
+        if step_m >= 1.0:
+            fmt_coord = lambda v: f"{v:.0f}"
+        elif step_m >= 0.1:
+            fmt_coord = lambda v: f"{v:.1f}"
+        elif step_m >= 0.01:
+            fmt_coord = lambda v: f"{v:.2f}"
+        else:
+            fmt_coord = lambda v: f"{v:.3f}"
+
         min_e, max_n = self.screen_to_utm(0, 0)
         max_e, min_n = self.screen_to_utm(w, h)
 
@@ -401,8 +553,8 @@ class CartoMapCanvas(QWidget):
         start_n = math.floor(min_n / step_m) * step_m
         end_n = math.ceil(max_n / step_m) * step_m
 
-        pen_grid = QPen(QColor(148, 163, 184, 120), 1, Qt.DashLine)
-        pen_text = QPen(QColor(51, 65, 85, 200))
+        pen_grid = QPen(QColor(148, 163, 184, 110), 1, Qt.DashLine)
+        pen_text = QPen(QColor(100, 116, 139))
         font_grid = QFont("Consolas", 8)
 
         painter.save()
@@ -410,35 +562,39 @@ class CartoMapCanvas(QWidget):
 
         # Líneas verticales (Este)
         cur_e = start_e
-        while cur_e <= end_e:
+        while cur_e <= end_e + 1e-5:
             sx, _ = self.utm_to_screen(cur_e, self.center_n)
             if 0 <= sx <= w:
                 painter.setPen(pen_grid)
                 painter.drawLine(QPointF(sx, 0), QPointF(sx, h))
                 painter.setPen(pen_text)
-                painter.drawText(QPointF(sx + 3, h - 8), f"{cur_e:,.0f} m E")
+                painter.drawText(QPointF(sx + 4, h - 6), fmt_coord(cur_e))
             cur_e += step_m
 
         # Líneas horizontales (Norte)
         cur_n = start_n
-        while cur_n <= end_n:
+        while cur_n <= end_n + 1e-5:
             _, sy = self.utm_to_screen(self.center_e, cur_n)
             if 0 <= sy <= h:
                 painter.setPen(pen_grid)
                 painter.drawLine(QPointF(0, sy), QPointF(w, sy))
                 painter.setPen(pen_text)
-                painter.drawText(QPointF(6, sy - 3), f"{cur_n:,.0f} m N")
+                painter.drawText(QPointF(6, sy - 4), fmt_coord(cur_n))
             cur_n += step_m
 
         painter.restore()
 
     def _draw_platforms(self, painter: QPainter):
         """Dibuja la huella vectorial de la plataforma georreferenciada orientada por rumbo (Yaw)."""
+        if not self.show_chassis or "chassis" in self.hidden_layers:
+            return
         proj = self.get_project()
         painter.save()
 
         for plat_id, plat in proj.platforms.items():
             if not plat.pose_e or plat.pose_e.ref_system_id != self.ref_system_id:
+                continue
+            if f"plat_{plat_id}" in self.hidden_layers or f"chassis_{plat_id}" in self.hidden_layers:
                 continue
 
             e_pla = plat.pose_e.utm_easting_m
@@ -458,52 +614,75 @@ class CartoMapCanvas(QWidget):
             painter.translate(sx, sy)
             painter.rotate(heading_grid_deg)
 
-            rect_chassis = QRectF(-width_px / 2.0, -length_px / 2.0, width_px, length_px)
+            # Dibujar geometría exacta del chasis (polígono trazado o caja centrada)
+            plat.ensure_polygon()
+            if plat.chassis_polygon and len(plat.chassis_polygon) >= 3:
+                poly_path = QPainterPath()
+                p0_xb = float(plat.chassis_polygon[0][0])
+                p0_yb = float(plat.chassis_polygon[0][1])
+                poly_path.moveTo(p0_yb * self.px_per_m, -p0_xb * self.px_per_m)
+                for pt in plat.chassis_polygon[1:]:
+                    poly_path.lineTo(float(pt[1]) * self.px_per_m, -float(pt[0]) * self.px_per_m)
+                poly_path.closeSubpath()
 
-            painter.setBrush(QBrush(QColor(2, 132, 199, 50)))
-            painter.setPen(QPen(QColor(3, 105, 161), 2))
-            painter.drawRoundedRect(rect_chassis, 3, 3)
+                painter.setBrush(QBrush(QColor(2, 132, 199, 45)))
+                painter.setPen(QPen(QColor(3, 105, 161), 2))
+                painter.drawPath(poly_path)
 
-            # Eje de Proa Xb (Rojo)
-            pen_xb = QPen(QColor(239, 68, 68), 2.5)
-            painter.setPen(pen_xb)
-            arrow_len = max(length_px * 0.6, 24.0)
-            painter.drawLine(QPointF(0, 0), QPointF(0, -arrow_len))
+                max_xb = max(float(pt[0]) for pt in plat.chassis_polygon)
+            else:
+                cx_b = float(plat.chassis_center_b[0]) if hasattr(plat, "chassis_center_b") else 0.0
+                cy_b = float(plat.chassis_center_b[1]) if hasattr(plat, "chassis_center_b") else 0.0
+                cx_px = cy_b * self.px_per_m
+                cy_px = -cx_b * self.px_per_m
+                rect_chassis = QRectF(cx_px - width_px / 2.0, cy_px - length_px / 2.0, width_px, length_px)
+
+                painter.setBrush(QBrush(QColor(2, 132, 199, 45)))
+                painter.setPen(QPen(QColor(3, 105, 161), 2))
+                painter.drawRoundedRect(rect_chassis, 3, 3)
+
+                max_xb = cx_b + length_m / 2.0
+
+            # Indicador sutil y estilizado de proa (+Xb) en el perímetro frontal del chasis
+            fwd_y = -max_xb * self.px_per_m
+            fwd_notch = QPolygonF([
+                QPointF(0, fwd_y - 6),
+                QPointF(-5, fwd_y + 3),
+                QPointF(5, fwd_y + 3)
+            ])
+            painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(QColor(239, 68, 68)))
-            tri_fwd = QPolygonF([QPointF(0, -arrow_len - 5), QPointF(-4, -arrow_len + 3), QPointF(4, -arrow_len + 3)])
-            painter.drawPolygon(tri_fwd)
+            painter.drawPolygon(fwd_notch)
 
-            # Eje de Estribor Yb (Verde)
-            pen_yb = QPen(QColor(16, 185, 129), 2.5)
-            painter.setPen(pen_yb)
-            arrow_w = max(width_px * 0.6, 18.0)
-            painter.drawLine(QPointF(0, 0), QPointF(arrow_w, 0))
-            painter.setBrush(QBrush(QColor(16, 185, 129)))
-            tri_rgt = QPolygonF([QPointF(arrow_w + 5, 0), QPointF(arrow_w - 3, -4), QPointF(arrow_w - 3, 4)])
-            painter.drawPolygon(tri_rgt)
-
-            # Origen central PLA (Azul)
-            painter.setPen(QPen(QColor(15, 23, 42), 1.5))
+            # Origen central PLA (discreto)
+            painter.setPen(QPen(QColor(15, 23, 42), 1.2))
             painter.setBrush(QBrush(QColor(2, 132, 199)))
-            painter.drawEllipse(QPointF(0, 0), 4.5, 4.5)
+            painter.drawEllipse(QPointF(0, 0), 3.5, 3.5)
 
             painter.restore()
 
+            # Etiqueta limpia: solo el nombre descriptivo de la plataforma (ej. PLA2)
             painter.setFont(QFont("Segoe UI", 9, QFont.Bold))
             painter.setPen(QPen(QColor(15, 23, 42)))
-            painter.drawText(QPointF(sx + 10, sy - 10), f"PLA: {plat.name} ({plat.id})")
+            painter.drawText(QPointF(sx + 10, sy - 14), plat.name)
 
         painter.restore()
 
     def _draw_sensors(self, painter: QPainter):
         """Dibuja cada sensor georreferenciado con su simbología métrica y etiqueta descriptiva."""
+        if not self.show_sensors or "sensors" in self.hidden_layers:
+            return
         proj = self.get_project()
         painter.save()
         painter.setFont(QFont("Consolas", 8, QFont.Bold))
 
-        for plat in proj.platforms.values():
+        for plat_id, plat in proj.platforms.items():
+            if f"plat_{plat_id}" in self.hidden_layers or f"sensors_{plat_id}" in self.hidden_layers:
+                continue
             for code, s in plat.sensors.items():
                 if not s.georef or s.georef.ref_system_id != self.ref_system_id:
+                    continue
+                if f"sensor_{plat_id}_{code}" in self.hidden_layers:
                     continue
 
                 e_s = s.georef.utm_easting_m
@@ -532,82 +711,89 @@ class CartoMapCanvas(QWidget):
 
     def _draw_n_frame_triad(self, painter: QPainter):
         """
-        Dibuja la terna local de navegación n-frame en el centro de la plataforma activa:
-        - Si es NED: Eje 1 (Rojo) = Norte, Eje 2 (Verde) = Este, Eje 3 (Azul) = Down (símbolo cruz).
-        - Si es ENU: Eje 1 (Rojo) = Este, Eje 2 (Verde) = Norte, Eje 3 (Azul) = Up (símbolo punto).
+        Dibuja la terna local de navegación n-frame en el centro de cada plataforma georreferenciada visible:
+        - Si es NED: Eje 1 (Rojo) = Norte (x_n), Eje 2 (Verde) = Este (y_n), Eje 3 (Azul) = Down (z_n, símbolo cruz).
+        - Si es ENU: Eje 1 (Rojo) = Este (x_e), Eje 2 (Verde) = Norte (y_n), Eje 3 (Azul) = Up (z_u, símbolo punto).
         """
-        proj = self.get_project()
-        active_plat = proj.get_active_platform()
-        if not active_plat or not active_plat.pose_e or active_plat.pose_e.ref_system_id != self.ref_system_id:
+        if not self.show_n_frame or "n_frame" in self.hidden_layers:
             return
+        proj = self.get_project()
 
-        e_pla = active_plat.pose_e.utm_easting_m
-        n_pla = active_plat.pose_e.utm_northing_m
-        sx, sy = self.utm_to_screen(e_pla, n_pla)
+        for plat_id, plat in proj.platforms.items():
+            if not plat.pose_e or plat.pose_e.ref_system_id != self.ref_system_id:
+                continue
+            if f"plat_{plat_id}" in self.hidden_layers or f"n_frame_{plat_id}" in self.hidden_layers:
+                continue
 
-        painter.save()
-        painter.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            e_pla = plat.pose_e.utm_easting_m
+            n_pla = plat.pose_e.utm_northing_m
+            sx, sy = self.utm_to_screen(e_pla, n_pla)
 
-        triad_len = 50.0
+            painter.save()
+            painter.setFont(QFont("Consolas", 8, QFont.Bold))
 
-        if self.n_frame_convention == "NED":
-            # Eje 1: Norte (x_n) -> Rojo (Hacia arriba en pantalla, -Y)
-            pen_n = QPen(QColor(239, 68, 68), 2.5)
-            painter.setPen(pen_n)
-            painter.drawLine(QPointF(sx, sy), QPointF(sx, sy - triad_len))
-            painter.setBrush(QBrush(QColor(239, 68, 68)))
-            painter.drawPolygon(QPolygonF([QPointF(sx, sy - triad_len - 6), QPointF(sx - 4, sy - triad_len + 2), QPointF(sx + 4, sy - triad_len + 2)]))
-            painter.drawText(QPointF(sx + 5, sy - triad_len - 4), "N (x_n)")
+            triad_len = 45.0
 
-            # Eje 2: Este (y_n) -> Verde (Hacia la derecha en pantalla, +X)
-            pen_e = QPen(QColor(16, 185, 129), 2.5)
-            painter.setPen(pen_e)
-            painter.drawLine(QPointF(sx, sy), QPointF(sx + triad_len, sy))
-            painter.setBrush(QBrush(QColor(16, 185, 129)))
-            painter.drawPolygon(QPolygonF([QPointF(sx + triad_len + 6, sy), QPointF(sx + triad_len - 2, sy - 4), QPointF(sx + triad_len - 2, sy + 4)]))
-            painter.drawText(QPointF(sx + triad_len + 6, sy + 12), "E (y_n)")
+            if self.n_frame_convention == "NED":
+                # Eje 1: Norte (x_n) -> Rojo (Hacia arriba en pantalla, -Y)
+                pen_n = QPen(QColor(239, 68, 68), 2.5)
+                painter.setPen(pen_n)
+                painter.drawLine(QPointF(sx, sy), QPointF(sx, sy - triad_len))
+                painter.setBrush(QBrush(QColor(239, 68, 68)))
+                painter.drawPolygon(QPolygonF([QPointF(sx, sy - triad_len - 6), QPointF(sx - 4, sy - triad_len + 2), QPointF(sx + 4, sy - triad_len + 2)]))
+                painter.drawText(QPointF(sx + 5, sy - triad_len - 4), "N (x_n)")
 
-            # Eje 3: Down (z_n) -> Azul (Perpendicular hacia dentro de la tierra: símbolo círculo con cruz)
-            painter.setPen(QPen(QColor(59, 130, 246), 2))
-            painter.setBrush(QBrush(QColor(255, 255, 255, 200)))
-            r = 7.0
-            painter.drawEllipse(QPointF(sx, sy), r, r)
-            painter.drawLine(QPointF(sx - 4, sy - 4), QPointF(sx + 4, sy + 4))
-            painter.drawLine(QPointF(sx - 4, sy + 4), QPointF(sx + 4, sy - 4))
-            painter.setPen(QPen(QColor(59, 130, 246)))
-            painter.drawText(QPointF(sx - 24, sy + 18), "D (z_n)")
+                # Eje 2: Este (y_n) -> Verde (Hacia la derecha en pantalla, +X)
+                pen_e = QPen(QColor(16, 185, 129), 2.5)
+                painter.setPen(pen_e)
+                painter.drawLine(QPointF(sx, sy), QPointF(sx + triad_len, sy))
+                painter.setBrush(QBrush(QColor(16, 185, 129)))
+                painter.drawPolygon(QPolygonF([QPointF(sx + triad_len + 6, sy), QPointF(sx + triad_len - 2, sy - 4), QPointF(sx + triad_len - 2, sy + 4)]))
+                painter.drawText(QPointF(sx + triad_len + 6, sy + 12), "E (y_n)")
 
-        else:
-            # ENU: Eje 1: Este (x_e) -> Rojo
-            pen_e = QPen(QColor(239, 68, 68), 2.5)
-            painter.setPen(pen_e)
-            painter.drawLine(QPointF(sx, sy), QPointF(sx + triad_len, sy))
-            painter.setBrush(QBrush(QColor(239, 68, 68)))
-            painter.drawPolygon(QPolygonF([QPointF(sx + triad_len + 6, sy), QPointF(sx + triad_len - 2, sy - 4), QPointF(sx + triad_len - 2, sy + 4)]))
-            painter.drawText(QPointF(sx + triad_len + 6, sy + 12), "E (x_e)")
+                # Eje 3: Down (z_n) -> Azul (Perpendicular hacia dentro de la tierra: símbolo círculo con cruz)
+                painter.setPen(QPen(QColor(59, 130, 246), 2))
+                painter.setBrush(QBrush(QColor(255, 255, 255, 200)))
+                r = 6.0
+                painter.drawEllipse(QPointF(sx, sy), r, r)
+                painter.drawLine(QPointF(sx - 3.5, sy - 3.5), QPointF(sx + 3.5, sy + 3.5))
+                painter.drawLine(QPointF(sx - 3.5, sy + 3.5), QPointF(sx + 3.5, sy - 3.5))
+                painter.setPen(QPen(QColor(59, 130, 246)))
+                painter.drawText(QPointF(sx - 22, sy + 16), "D (z_n)")
 
-            # Eje 2: Norte (y_n) -> Verde
-            pen_n = QPen(QColor(16, 185, 129), 2.5)
-            painter.setPen(pen_n)
-            painter.drawLine(QPointF(sx, sy), QPointF(sx, sy - triad_len))
-            painter.setBrush(QBrush(QColor(16, 185, 129)))
-            painter.drawPolygon(QPolygonF([QPointF(sx, sy - triad_len - 6), QPointF(sx - 4, sy - triad_len + 2), QPointF(sx + 4, sy - triad_len + 2)]))
-            painter.drawText(QPointF(sx + 5, sy - triad_len - 4), "N (y_n)")
+            else:
+                # ENU: Eje 1: Este (x_e) -> Rojo
+                pen_e = QPen(QColor(239, 68, 68), 2.5)
+                painter.setPen(pen_e)
+                painter.drawLine(QPointF(sx, sy), QPointF(sx + triad_len, sy))
+                painter.setBrush(QBrush(QColor(239, 68, 68)))
+                painter.drawPolygon(QPolygonF([QPointF(sx + triad_len + 6, sy), QPointF(sx + triad_len - 2, sy - 4), QPointF(sx + triad_len - 2, sy + 4)]))
+                painter.drawText(QPointF(sx + triad_len + 6, sy + 12), "E (x_e)")
 
-            # Eje 3: Up (z_u) -> Azul (Perpendicular hacia afuera: símbolo círculo con punto)
-            painter.setPen(QPen(QColor(59, 130, 246), 2))
-            painter.setBrush(QBrush(QColor(255, 255, 255, 200)))
-            r = 7.0
-            painter.drawEllipse(QPointF(sx, sy), r, r)
-            painter.setBrush(QBrush(QColor(59, 130, 246)))
-            painter.drawEllipse(QPointF(sx, sy), 2.5, 2.5)
-            painter.setPen(QPen(QColor(59, 130, 246)))
-            painter.drawText(QPointF(sx - 24, sy + 18), "U (z_u)")
+                # Eje 2: Norte (y_n) -> Verde
+                pen_n = QPen(QColor(16, 185, 129), 2.5)
+                painter.setPen(pen_n)
+                painter.drawLine(QPointF(sx, sy), QPointF(sx, sy - triad_len))
+                painter.setBrush(QBrush(QColor(16, 185, 129)))
+                painter.drawPolygon(QPolygonF([QPointF(sx, sy - triad_len - 6), QPointF(sx - 4, sy - triad_len + 2), QPointF(sx + 4, sy - triad_len + 2)]))
+                painter.drawText(QPointF(sx + 5, sy - triad_len - 4), "N (y_n)")
 
-        painter.restore()
+                # Eje 3: Up (z_u) -> Azul (Perpendicular hacia afuera: símbolo círculo con punto)
+                painter.setPen(QPen(QColor(59, 130, 246), 2))
+                painter.setBrush(QBrush(QColor(255, 255, 255, 200)))
+                r = 6.0
+                painter.drawEllipse(QPointF(sx, sy), r, r)
+                painter.setBrush(QBrush(QColor(59, 130, 246)))
+                painter.drawEllipse(QPointF(sx, sy), 2.5, 2.5)
+                painter.setPen(QPen(QColor(59, 130, 246)))
+                painter.drawText(QPointF(sx - 22, sy + 16), "U (z_u)")
+
+            painter.restore()
 
     def _draw_compass_rose(self, painter: QPainter):
         """Dibuja una elegante rosa de los vientos técnica en la esquina superior derecha."""
+        if not self.show_compass or "compass" in self.hidden_layers:
+            return
         w = self.width()
         cx = w - 45.0
         cy = 50.0
@@ -636,6 +822,8 @@ class CartoMapCanvas(QWidget):
 
     def _draw_scale_bar(self, painter: QPainter):
         """Dibuja una barra de escala gráfica métrica adaptativa en la esquina inferior izquierda."""
+        if not self.show_scalebar or "scalebar" in self.hidden_layers:
+            return
         h = self.height()
         target_bar_px = 120.0
         bar_m_raw = target_bar_px / max(self.px_per_m, 1e-6)
@@ -667,9 +855,17 @@ class CartoMapCanvas(QWidget):
         painter.drawLine(QPointF(bx, by - 4), QPointF(bx, by + 4))
         painter.drawLine(QPointF(bx + actual_bar_px, by - 4), QPointF(bx + actual_bar_px, by + 4))
 
-        label = f"{bar_m:,.0f} m" if bar_m < 1000.0 else f"{bar_m/1000.0:,.1f} km"
+        if bar_m < 0.1:
+            label = f"{bar_m:.2f} m"
+        elif bar_m < 1.0:
+            label = f"{bar_m:.1f} m"
+        elif bar_m < 1000.0:
+            label = f"{bar_m:.0f} m"
+        else:
+            label = f"{bar_m/1000.0:.1f} km"
+
         painter.setPen(QPen(QColor(15, 23, 42)))
-        painter.drawText(QPointF(bx + actual_bar_px / 2.0 - 15, by - 5), label)
+        painter.drawText(QRectF(bx, by - 16, actual_bar_px, 12), Qt.AlignCenter, label)
 
         painter.restore()
 
@@ -677,8 +873,9 @@ class CartoMapCanvas(QWidget):
 class CartoMapWidget(QWidget):
     """
     Contenedor completo de la pestaña de Mapa Cartográfico 2D (e-frame).
-    Integra la barra de herramientas cartográficas, el lienzo vectorial y la barra de coordenadas inferior.
+    Lienzo 100% limpio sin barras de herramientas invasivas y con barra de coordenadas inferior.
     """
+    basemap_visibility_changed = Signal(str, bool)
 
     def __init__(
         self,
@@ -694,87 +891,14 @@ class CartoMapWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 1. Barra de herramientas superior compacta
-        self.toolbar = QToolBar("Herramientas de Mapa")
-        self.toolbar.setMovable(False)
-        self.toolbar.setStyleSheet("QToolBar { background-color: #f8fafc; border-bottom: 1px solid #cbd5e1; padding: 2px 6px; }")
-
-        # Botón Centrar en Plataforma
-        self.btn_fit_plat = QToolButton()
-        self.btn_fit_plat.setText("Centrar en Plataforma")
-        self.btn_fit_plat.setToolTip("Encuadra y centra la vista en la plataforma activa")
-        self.btn_fit_plat.clicked.connect(self._on_center_platform)
-        self.toolbar.addWidget(self.btn_fit_plat)
-
-        # Botón Zoom Extensión
-        self.btn_fit_all = QToolButton()
-        self.btn_fit_all.setText("Zoom Extensión")
-        self.btn_fit_all.setToolTip("Encuadre general que abarca todas las plataformas y sensores georreferenciados")
-        self.btn_fit_all.clicked.connect(self._on_zoom_extent)
-        self.toolbar.addWidget(self.btn_fit_all)
-
-        self.toolbar.addSeparator()
-
-        # Botón Toggle Mapa Base (OSM)
-        self.btn_toggle_osm = QToolButton()
-        self.btn_toggle_osm.setText("Mapa Base: OSM")
-        self.btn_toggle_osm.setCheckable(True)
-        self.btn_toggle_osm.setChecked(True)
-        self.btn_toggle_osm.setToolTip("Activar o desactivar las teselas cartográficas de OpenStreetMap")
-        self.btn_toggle_osm.toggled.connect(self._on_toggle_osm)
-        self.toolbar.addWidget(self.btn_toggle_osm)
-
-        # Selector de Convención n-frame
-        lbl_nframe = QLabel(" Terna local: ")
-        lbl_nframe.setStyleSheet("font-size: 11px; font-weight: 500; color: #475569;")
-        self.toolbar.addWidget(lbl_nframe)
-
-        self.combo_nframe = QComboBox()
-        self.combo_nframe.addItems(["n-frame: NED (Inercial)", "n-frame: ENU (GeoTop)"])
-        self.combo_nframe.setToolTip("Convención de navegación local tangente a la plataforma")
-        self.combo_nframe.currentIndexChanged.connect(self._on_nframe_convention_changed)
-        self.toolbar.addWidget(self.combo_nframe)
-
-        self.toolbar.addSeparator()
-
-        # Menú Capas Visibles
-        self.btn_layers = QToolButton()
-        self.btn_layers.setText("Capas Visibles")
-        self.btn_layers.setPopupMode(QToolButton.InstantPopup)
-        menu_layers = QMenu(self)
-
-        self.act_lay_chassis = menu_layers.addAction("Plataformas y Chasis")
-        self.act_lay_chassis.setCheckable(True)
-        self.act_lay_chassis.setChecked(True)
-        self.act_lay_chassis.toggled.connect(self._on_toggle_chassis)
-
-        self.act_lay_sensors = menu_layers.addAction("Sensores Georreferenciados")
-        self.act_lay_sensors.setCheckable(True)
-        self.act_lay_sensors.setChecked(True)
-        self.act_lay_sensors.toggled.connect(self._on_toggle_sensors)
-
-        self.act_lay_triad = menu_layers.addAction("Terna n-frame")
-        self.act_lay_triad.setCheckable(True)
-        self.act_lay_triad.setChecked(True)
-        self.act_lay_triad.toggled.connect(self._on_toggle_triad)
-
-        self.act_lay_grid = menu_layers.addAction("Cuadrícula UTM")
-        self.act_lay_grid.setCheckable(True)
-        self.act_lay_grid.setChecked(True)
-        self.act_lay_grid.toggled.connect(self._on_toggle_grid)
-
-        self.btn_layers.setMenu(menu_layers)
-        self.toolbar.addWidget(self.btn_layers)
-
-        layout.addWidget(self.toolbar)
-
-        # 2. Lienzo Cartográfico Central
+        # 1. Lienzo Cartográfico Central
         self.canvas = CartoMapCanvas(self.get_project, self.ref_system_id, self)
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.canvas.coordinates_changed.connect(self._on_coordinates_changed)
+        self.canvas.basemap_visibility_changed.connect(self.basemap_visibility_changed)
         layout.addWidget(self.canvas, 1)
 
-        # 3. Barra de Coordenadas Inferior
+        # 2. Barra de Coordenadas Inferior
         self.footer = QWidget()
         self.footer.setFixedHeight(24)
         self.footer.setStyleSheet("background-color: #f8fafc; border-top: 1px solid #cbd5e1; font-family: 'Consolas', monospace; font-size: 11px;")
@@ -813,34 +937,28 @@ class CartoMapWidget(QWidget):
         self.lbl_srt_info.setText(rs_label)
         self.canvas.set_ref_system_id(rs_id)
 
-    def _on_center_platform(self):
-        self.canvas.zoom_to_platforms()
+    def zoom_to_platform(self, plat_id: str):
+        """Encuadra la vista en la bounding box de la plataforma especificada."""
+        proj = self.get_project()
+        plat = proj.get_platform(plat_id)
+        if not plat:
+            return
+        bbox = plat.get_utm_bounding_box()
+        if bbox:
+            self.canvas.zoom_to_bbox(bbox["min_e"], bbox["max_e"], bbox["min_n"], bbox["max_n"], margin=0.35)
+        else:
+            self.canvas.zoom_to_platforms()
 
-    def _on_zoom_extent(self):
-        self.canvas.zoom_to_fit_extent()
-
-    def _on_toggle_osm(self, checked: bool):
-        self.canvas.show_osm = checked
-        self.canvas.update()
-
-    def _on_nframe_convention_changed(self, index: int):
-        self.canvas.n_frame_convention = "NED" if index == 0 else "ENU"
-        self.canvas.update()
-
-    def _on_toggle_chassis(self, checked: bool):
-        self.canvas.show_chassis = checked
-        self.canvas.update()
-
-    def _on_toggle_sensors(self, checked: bool):
-        self.canvas.show_sensors = checked
-        self.canvas.update()
-
-    def _on_toggle_triad(self, checked: bool):
-        self.canvas.show_n_frame = checked
-        self.canvas.update()
-
-    def _on_toggle_grid(self, checked: bool):
-        self.canvas.show_grid = checked
+    def set_layer_visibility(self, layer_key: str, visible: bool):
+        """Actualiza la visibilidad de una capa en el lienzo cartográfico."""
+        if visible:
+            self.canvas.hidden_layers.discard(layer_key)
+            if layer_key == "basemap":
+                self.canvas.show_osm = True
+        else:
+            self.canvas.hidden_layers.add(layer_key)
+            if layer_key == "basemap":
+                self.canvas.show_osm = False
         self.canvas.update()
 
     def _on_coordinates_changed(self, easting: float, northing: float, lat_deg: float, lon_deg: float):
@@ -848,3 +966,4 @@ class CartoMapWidget(QWidget):
         lat_dir = "N" if lat_deg >= 0 else "S"
         lon_dir = "E" if lon_deg >= 0 else "W"
         self.lbl_coords_geo.setText(f"φ: {abs(lat_deg):.6f}°{lat_dir} | λ: {abs(lon_deg):.6f}°{lon_dir}")
+

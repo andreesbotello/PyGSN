@@ -10,6 +10,7 @@ Definicion de datos estructurados para plataformas universales y sensores:
 from dataclasses import dataclass, field
 from enum import Enum
 import json
+import math
 from typing import Any
 import numpy as np
 
@@ -199,6 +200,38 @@ class PlatformPose:
             dcm_b2e=data.get("dcm_b2e", [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
             method=data.get("method", "SVD"),
         )
+
+    @property
+    def roll_deg(self) -> float:
+        """Ángulo de balanceo (Roll) en grados."""
+        return float(self.attitude_rpy_deg[0]) if self.attitude_rpy_deg else 0.0
+
+    @property
+    def pitch_deg(self) -> float:
+        """Ángulo de cabeceo (Pitch) en grados."""
+        return float(self.attitude_rpy_deg[1]) if self.attitude_rpy_deg else 0.0
+
+    @property
+    def yaw_deg(self) -> float:
+        """Ángulo de guiñada o rumbo (Yaw) en grados respecto al Norte geográfico."""
+        return float(self.attitude_rpy_deg[2]) if self.attitude_rpy_deg else 0.0
+
+    @property
+    def convergence_deg(self) -> float:
+        """Convergencia de meridianos gamma en grados para el punto medio de la plataforma."""
+        if self.lat_deg == 0.0 and self.lon_deg == 0.0:
+            return 0.0
+        from .geodesy import utm_meridian_convergence
+        try:
+            gamma_rad = utm_meridian_convergence(
+                math.radians(self.lat_deg),
+                math.radians(self.lon_deg),
+                zone=self.utm_zone
+            )
+            return float(math.degrees(gamma_rad))
+        except Exception:
+            return 0.0
+
 
 
 @dataclass
@@ -394,6 +427,7 @@ class ReferenceSystem:
     utm_zone: int = 30                           # 1 a 60
     utm_hemisphere: str = "N"                    # "N" o "S"
     is_active: bool = False                      # Marca de SRT activo
+    show_basemap: bool = True                    # Visibilidad del mapa base OpenStreetMap
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def get_ellipsoid(self):
@@ -416,6 +450,7 @@ class ReferenceSystem:
             "utm_zone": int(self.utm_zone),
             "utm_hemisphere": self.utm_hemisphere,
             "is_active": self.is_active,
+            "show_basemap": bool(self.show_basemap),
             "metadata": dict(self.metadata),
         }
 
@@ -430,6 +465,7 @@ class ReferenceSystem:
             utm_zone=int(data.get("utm_zone", 30)),
             utm_hemisphere=str(data.get("utm_hemisphere", "N")),
             is_active=bool(data.get("is_active", False)),
+            show_basemap=bool(data.get("show_basemap", True)),
             metadata=dict(data.get("metadata", {})),
         )
 
@@ -551,6 +587,79 @@ class Platform:
             "y_max": round(y_max, 4),
             "z_min": round(cz - hz, 4),
             "z_max": round(cz + hz, 4),
+        }
+
+    def get_utm_bounding_box(self) -> dict[str, float] | None:
+        """
+        Calcula la caja envolvente mínima orientada al Norte cartográfico (Bounding Box)
+        en coordenadas UTM (Easting, Northing) para la plataforma y todos sus sensores vinculados.
+        Retorna un diccionario con min_e, max_e, min_n, max_n, span_e, span_n, center_e, center_n,
+        o None si la plataforma no está georreferenciada.
+        """
+        if not self.pose_e:
+            return None
+
+        e_pla = self.pose_e.utm_easting_m
+        n_pla = self.pose_e.utm_northing_m
+
+        # Obtener rumbo de cuadrícula (Heading Grid = Yaw - gamma)
+        gamma_deg = self.pose_e.convergence_deg
+        heading_grid_deg = self.pose_e.yaw_deg - gamma_deg
+        psi_rad = math.radians(heading_grid_deg)
+        sin_psi = math.sin(psi_rad)
+        cos_psi = math.cos(psi_rad)
+
+        all_e: list[float] = [e_pla]
+        all_n: list[float] = [n_pla]
+
+        # 1. Vértices del chasis en b-frame proyectados a UTM
+        self.ensure_polygon()
+        if self.chassis_polygon:
+            for pt in self.chassis_polygon:
+                xb, yb = float(pt[0]), float(pt[1])
+                e_v = e_pla + xb * sin_psi + yb * cos_psi
+                n_v = n_pla + xb * cos_psi - yb * sin_psi
+                all_e.append(e_v)
+                all_n.append(n_v)
+        elif self.has_dimensions or (self.length_m > 0 and self.width_m > 0):
+            hl = self.length_m / 2.0 if self.length_m > 0 else 1.25
+            hw = self.width_m / 2.0 if self.width_m > 0 else 0.75
+            cx_b = float(self.chassis_center_b[0]) if hasattr(self, "chassis_center_b") else 0.0
+            cy_b = float(self.chassis_center_b[1]) if hasattr(self, "chassis_center_b") else 0.0
+            for dx, dy in [(hl, -hw), (hl, hw), (-hl, hw), (-hl, -hw)]:
+                xb = cx_b + dx
+                yb = cy_b + dy
+                e_v = e_pla + xb * sin_psi + yb * cos_psi
+                n_v = n_pla + xb * cos_psi - yb * sin_psi
+                all_e.append(e_v)
+                all_n.append(n_v)
+
+        # 2. Sensores vinculados a la plataforma
+        for s in self.sensors.values():
+            if s.georef and s.georef.ref_system_id == self.pose_e.ref_system_id:
+                all_e.append(float(s.georef.utm_easting_m))
+                all_n.append(float(s.georef.utm_northing_m))
+            else:
+                xb, yb = float(s.lever_arm_b[0]), float(s.lever_arm_b[1])
+                e_s = e_pla + xb * sin_psi + yb * cos_psi
+                n_s = n_pla + xb * cos_psi - yb * sin_psi
+                all_e.append(e_s)
+                all_n.append(n_s)
+
+        min_e = min(all_e)
+        max_e = max(all_e)
+        min_n = min(all_n)
+        max_n = max(all_n)
+
+        return {
+            "min_e": round(min_e, 4),
+            "max_e": round(max_e, 4),
+            "min_n": round(min_n, 4),
+            "max_n": round(max_n, 4),
+            "span_e": round(max_e - min_e, 4),
+            "span_n": round(max_n - min_n, 4),
+            "center_e": round((min_e + max_e) / 2.0, 4),
+            "center_n": round((min_n + max_n) / 2.0, 4),
         }
 
     def translate(self, dx: float, dy: float, dz: float = 0.0) -> None:
