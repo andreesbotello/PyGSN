@@ -27,9 +27,11 @@ from .operators import (
     GeoreferencingOperator, TrajectoryKinematicsOperator, ReportingOperator
 )
 
+from .cli_engine import CLIEngine
+
 __all__ = [
     "Sensor", "SensorType", "Platform",
-    "VehicleMesh", "Project",
+    "VehicleMesh", "Project", "CLIEngine",
     "Ellipsoid", "GRS80", "WGS84",
     "radii_of_curvature", "geodetic_to_ecef", "ecef_to_geodetic",
     "utm_projection_huso30", "dms_to_rad", "rad_to_dms",

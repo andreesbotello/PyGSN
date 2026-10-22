@@ -258,3 +258,27 @@ Para garantizar estabilidad matemática, código limpio y evitar sobrecargar la 
   - Sincronización automática con el árbol de jerarquía mediante `select_sensor_item` y `setCurrentItem`.
   - Corrección del fallback forzado al primer sensor en `start_sensor_edit` y `_on_toggle_sensor_edit`.
   - Capacidad de conmutar en caliente el sensor activo bajo edición al hacer clic sobre otro sensor en el lienzo o en el panel de capas.
+
+### Fase 8: Tarea AZ — Homogeneización y Plena Operatividad de los 3 Contextos (GUI, CLI, API) (ESTADO: COMPLETADA)
+- **Persistencia Desacoplada de Georreferenciación en Core**:
+  - Implementación de `Platform.apply_georeferencing_solution(solution, reference_system, method_str)` en `core/models.py`.
+  - Actualización automática de `platform.pose_e` (`PlatformPose`) y de `sensor.georef` (`SensorGeoref`) para todos los sensores involucrados.
+  - Delegación limpia desde `gui/dialog_georeferencing.py` eliminando lógica atrapada en la interfaz gráfica.
+- **API Fluida de Alto Nivel (`core/project.py`)**:
+  - `Project.solve_georeferencing(reference_system_id, method, apply_to_platform)`: resuelve SVD Kabsch + INS y aplica resultados.
+  - `Project.import_sensors_from_table(file_path, platform_id)`: importa tablas `.csv`, `.xlsx` o `.txt` con extracción de observables.
+  - `Project.export_report(output_path, author, method)`: genera y exporta informe técnico en texto plano.
+  - `Project.get_summary()`: devuelve resumen estructurado en diccionario.
+- **Motor CLI Desacoplado y Autónomo (`core/cli_engine.py`)**:
+  - Clase `CLIEngine` 100% independiente de Qt y ejecutable en modo headless.
+  - Árbol completo de comandos: `project` (new, open, save, saveas, status), `srt` (list, add, select), `platform` (list, add, select), `chassis` (box, poly, pts, move, center, rotate, scale, clear), `sensor` (list, add, place, move, rotate, remove), `import` (table), `solve`, `residuals`, `diag`, `report`.
+  - Tokenización de comandos mediante `shlex` para soporte de argumentos entrecomillados y rutas de archivos.
+- **Terminal Headless y Unificación de Consola**:
+  - `main.py`: opción `--cli` / `-i` / `--interactive` para iniciar sesión REPL pura en consola del sistema operativo.
+  - `gui/dock_console.py`: refactorizado para usar `CLIEngine` como cerebro, con navegación de historial de comandos por flechas arriba/abajo mediante `eventFilter`.
+- **Dataset Interno Universal (`data/calibracion_rig_multisensor.csv`)**:
+  - Dataset de 7 sensores con lever-arms, boresight y observaciones de campo en formato CSV universal.
+  - Elimina dependencias de rutas externas para la suite de pruebas automatizadas.
+- **Validación y Pruebas Unitarias (`tests/test_harmonization_az.py`)**:
+  - Validación completa del flujo end-to-end por API y por CLI.
+  - 43 pruebas unitarias pasando con 100% de éxito en 1.9s.

@@ -18,11 +18,15 @@ en marco terrestre (e-frame) proyectado en ETRS89 / UTM Huso 30N (EPSG:25830):
 
 from typing import Optional, Dict, Any, Tuple, List, Callable
 from pathlib import Path
+from collections import OrderedDict
+import logging
 import math
 import urllib.request
 import urllib.error
 import concurrent.futures
 import numpy as np
+
+logger = logging.getLogger("PyGSN.gui.map")
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QToolBar, QToolButton,
@@ -51,7 +55,8 @@ class OSMTileManager(QObject):
         super().__init__(parent)
         self.cache_dir = Path.home() / ".pygsn" / "cache" / "osm_tiles"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self._mem_cache: Dict[Tuple[int, int, int], QPixmap] = {}
+        self.max_mem_tiles = 256
+        self._mem_cache: OrderedDict[Tuple[int, int, int], QPixmap] = OrderedDict()
         self._pending_requests: set[Tuple[int, int, int]] = set()
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
         self.is_offline = False
@@ -60,9 +65,11 @@ class OSMTileManager(QObject):
         """
         Obtiene la tesela para el nivel de zoom z y coordenadas x, y.
         Retorna QPixmap si está en memoria o en disco; si no, lanza la descarga en segundo plano y retorna None.
+        Aplica política de desalojo LRU en memoria (máximo 256 teselas).
         """
         key = (z, x, y)
         if key in self._mem_cache:
+            self._mem_cache.move_to_end(key)
             return self._mem_cache[key]
 
         tile_file = self.cache_dir / str(z) / str(x) / f"{y}.png"
@@ -71,9 +78,11 @@ class OSMTileManager(QObject):
                 pix = QPixmap(str(tile_file))
                 if not pix.isNull():
                     self._mem_cache[key] = pix
+                    if len(self._mem_cache) > self.max_mem_tiles:
+                        self._mem_cache.popitem(last=False)
                     return pix
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Error al leer tesela en disco %s: %s", tile_file, exc)
 
         # Solicitar descarga asíncrona si no está pendiente y no estamos en fallo permanente
         if key not in self._pending_requests and not self.is_offline:
@@ -152,15 +161,21 @@ class CartoMapCanvas(QWidget):
         self._drag_start_center_e = 0.0
         self._drag_start_center_n = 0.0
 
-        # Gestor de teselas
+        # Gestor de teselas y caché de esquinas UTM invariantes
         self.tile_mgr = OSMTileManager(self)
         self.tile_mgr.tile_loaded.connect(self._on_tile_downloaded)
+        self._tile_utm_cache: Dict[Tuple[int, int, int, int, str], Tuple[float, float, float, float, float, float, float, float]] = {}
 
         self.setMouseTracking(True)
         self.setCursor(Qt.CrossCursor)
 
         # Centrar si hay alguna plataforma georreferenciada en este SRT
         self.zoom_to_platforms()
+
+    def get_current_ref_system(self) -> Optional[ReferenceSystem]:
+        """Obtiene la parametrización del Sistema de Referencia Terrestre (SRT) activo del lienzo."""
+        proj = self.get_project()
+        return proj.reference_systems.get(self.ref_system_id)
 
     def _on_tile_downloaded(self, z: int, x: int, y: int):
         if self.show_osm and "basemap" not in self.hidden_layers:
@@ -315,14 +330,18 @@ class CartoMapCanvas(QWidget):
         cur_pos = event.pos()
         e, n = self.screen_to_utm(cur_pos.x(), cur_pos.y())
 
-        # Calcular geodésicas instantáneas para la barra de estado
+        # Calcular geodésicas instantáneas para la barra de estado en el huso del SRT activo
+        rs = self.get_current_ref_system()
+        zone = rs.utm_zone if rs else 30
+        hemi = rs.utm_hemisphere if rs else "N"
+        ell = rs.get_ellipsoid() if (rs and hasattr(rs, "get_ellipsoid")) else GRS80
         try:
-            lat_rad, lon_rad = utm_inverse(e, n, zone=30, hemisphere="N", ell=GRS80)
+            lat_rad, lon_rad = utm_inverse(e, n, zone=zone, hemisphere=hemi, ell=ell)
             lat_deg = math.degrees(lat_rad)
             lon_deg = math.degrees(lon_rad)
             self.coordinates_changed.emit(e, n, lat_deg, lon_deg)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Error en conversión geodésica del cursor: %s", exc)
 
         if self._dragging:
             dx = cur_pos.x() - self._drag_start_pos.x()
@@ -341,7 +360,8 @@ class CartoMapCanvas(QWidget):
         old_e, old_n = self.screen_to_utm(mouse_pos.x(), mouse_pos.y())
 
         factor = 1.25 if event.angleDelta().y() > 0 else 0.80
-        new_px_per_m = np.clip(self.px_per_m * factor, 0.005, 500.0)
+        # Escala contextualizada a la ingeniería local (desde 2 cm/px hasta 50 m/px)
+        new_px_per_m = np.clip(self.px_per_m * factor, 0.02, 500.0)
         self.px_per_m = float(new_px_per_m)
 
         # Mantener el punto bajo el cursor exactamente en la misma coordenada
@@ -371,46 +391,46 @@ class CartoMapCanvas(QWidget):
         if self.show_osm:
             try:
                 self._draw_osm_tiles(painter)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Fallo al renderizar capa OpenStreetMap: %s", exc)
 
         # 2. Capa Cuadrícula UTM
         if self.show_grid:
             try:
                 self._draw_utm_grid(painter)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Fallo al renderizar cuadrícula UTM: %s", exc)
 
         # 3. Plataformas georreferenciadas
         if self.show_chassis:
             try:
                 self._draw_platforms(painter)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Fallo al renderizar plataformas: %s", exc)
 
         # 4. Sensores georreferenciados
         if self.show_sensors:
             try:
                 self._draw_sensors(painter)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Fallo al renderizar sensores: %s", exc)
 
         # 5. Terna local de navegación n-frame
         if self.show_n_frame:
             try:
                 self._draw_n_frame_triad(painter)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Fallo al renderizar terna n-frame: %s", exc)
 
         # 6. Elementos cartográficos fijos (Rosa de los Vientos y Escala)
         try:
             self._draw_compass_rose(painter)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Fallo al renderizar rosa de los vientos: %s", exc)
         try:
             self._draw_scale_bar(painter)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Fallo al renderizar barra de escala: %s", exc)
 
     def _draw_osm_tiles(self, painter: QPainter):
         """Calcula el rango de teselas OSM visibles, las proyecta con QTransform.quadToQuad continuo y las dibuja."""
@@ -420,6 +440,12 @@ class CartoMapCanvas(QWidget):
         w = self.width()
         h = self.height()
 
+        # Contexto del SRT activo
+        rs = self.get_current_ref_system()
+        zone = rs.utm_zone if rs else 30
+        hemi = rs.utm_hemisphere if rs else "N"
+        ell = rs.get_ellipsoid() if (rs and hasattr(rs, "get_ellipsoid")) else GRS80
+
         # Calcular las 4 esquinas de la ventana de visualización en UTM
         corners_screen = [(0, 0), (w, 0), (w, h), (0, h)]
         lats = []
@@ -427,7 +453,7 @@ class CartoMapCanvas(QWidget):
         for sx, sy in corners_screen:
             e, n = self.screen_to_utm(sx, sy)
             try:
-                lat_rad, lon_rad = utm_inverse(e, n, zone=30, hemisphere="N", ell=GRS80)
+                lat_rad, lon_rad = utm_inverse(e, n, zone=zone, hemisphere=hemi, ell=ell)
                 lats.append(math.degrees(lat_rad))
                 lons.append(math.degrees(lon_rad))
             except Exception:
@@ -480,36 +506,45 @@ class CartoMapCanvas(QWidget):
                 if not pix or pix.isNull():
                     continue
 
-                # Coordenadas geodésicas de las 4 esquinas de la tesela
-                lat_top, lon_left = tile2deg(tx, ty, z)
-                lat_top_r, lon_right = tile2deg(tx + 1, ty, z)
-                lat_bot_r, lon_right_b = tile2deg(tx + 1, ty + 1, z)
-                lat_bot, lon_left_b = tile2deg(tx, ty + 1, z)
+                # Coordenadas UTM de las 4 esquinas (con caché de proyección instantánea 60 FPS)
+                cache_key = (z, tx, ty, zone, hemi)
+                if cache_key in self._tile_utm_cache:
+                    e_tl, n_tl, e_tr, n_tr, e_br, n_br, e_bl, n_bl = self._tile_utm_cache[cache_key]
+                else:
+                    lat_top, lon_left = tile2deg(tx, ty, z)
+                    lat_top_r, lon_right = tile2deg(tx + 1, ty, z)
+                    lat_bot_r, lon_right_b = tile2deg(tx + 1, ty + 1, z)
+                    lat_bot, lon_left_b = tile2deg(tx, ty + 1, z)
 
-                try:
-                    e_tl, n_tl, _ = utm_projection(math.radians(lat_top), math.radians(lon_left), zone=30, hemisphere="N")
-                    e_tr, n_tr, _ = utm_projection(math.radians(lat_top_r), math.radians(lon_right), zone=30, hemisphere="N")
-                    e_br, n_br, _ = utm_projection(math.radians(lat_bot_r), math.radians(lon_right_b), zone=30, hemisphere="N")
-                    e_bl, n_bl, _ = utm_projection(math.radians(lat_bot), math.radians(lon_left_b), zone=30, hemisphere="N")
+                    try:
+                        e_tl, n_tl, _ = utm_projection(math.radians(lat_top), math.radians(lon_left), zone=zone, hemisphere=hemi, ell=ell)
+                        e_tr, n_tr, _ = utm_projection(math.radians(lat_top_r), math.radians(lon_right), zone=zone, hemisphere=hemi, ell=ell)
+                        e_br, n_br, _ = utm_projection(math.radians(lat_bot_r), math.radians(lon_right_b), zone=zone, hemisphere=hemi, ell=ell)
+                        e_bl, n_bl, _ = utm_projection(math.radians(lat_bot), math.radians(lon_left_b), zone=zone, hemisphere=hemi, ell=ell)
 
-                    sx_tl, sy_tl = self.utm_to_screen(e_tl, n_tl)
-                    sx_tr, sy_tr = self.utm_to_screen(e_tr, n_tr)
-                    sx_br, sy_br = self.utm_to_screen(e_br, n_br)
-                    sx_bl, sy_bl = self.utm_to_screen(e_bl, n_bl)
+                        if len(self._tile_utm_cache) > 1024:
+                            self._tile_utm_cache.clear()
+                        self._tile_utm_cache[cache_key] = (e_tl, n_tl, e_tr, n_tr, e_br, n_br, e_bl, n_bl)
+                    except Exception as exc:
+                        logger.debug("Error proyectando esquinas de tesela %s: %s", (z, tx, ty), exc)
+                        continue
 
-                    dst_quad = QPolygonF([
-                        QPointF(sx_tl, sy_tl),
-                        QPointF(sx_tr, sy_tr),
-                        QPointF(sx_br, sy_br),
-                        QPointF(sx_bl, sy_bl)
-                    ])
+                sx_tl, sy_tl = self.utm_to_screen(e_tl, n_tl)
+                sx_tr, sy_tr = self.utm_to_screen(e_tr, n_tr)
+                sx_br, sy_br = self.utm_to_screen(e_br, n_br)
+                sx_bl, sy_bl = self.utm_to_screen(e_bl, n_bl)
 
-                    trans = QTransform()
-                    if QTransform.quadToQuad(src_quad, dst_quad, trans):
-                        painter.setTransform(trans * base_transform)
-                        painter.drawPixmap(0, 0, pix)
-                except Exception:
-                    continue
+                dst_quad = QPolygonF([
+                    QPointF(sx_tl, sy_tl),
+                    QPointF(sx_tr, sy_tr),
+                    QPointF(sx_br, sy_br),
+                    QPointF(sx_bl, sy_bl)
+                ])
+
+                trans = QTransform()
+                if QTransform.quadToQuad(src_quad, dst_quad, trans):
+                    painter.setTransform(trans * base_transform)
+                    painter.drawPixmap(0, 0, pix)
 
         painter.setTransform(base_transform)
         painter.restore()

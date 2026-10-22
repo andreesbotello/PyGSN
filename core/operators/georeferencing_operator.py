@@ -168,6 +168,23 @@ class GeoreferencingOperator(BaseOperator):
             result.log(f"Actitud calculada con exito (SVD Kabsch): Roll={rg:.4f} deg, Pitch={pg:.4f} deg, Yaw={yg:.4f} deg")
             result.log(f"Posicion PLA: Lat={geo_res.pla_origin_lat_rad:.8f} rad, Lon={geo_res.pla_origin_lon_rad:.8f} rad, h={geo_res.pla_origin_h_ellip:.4f} m")
 
+            if kwargs.get("apply_to_platform", True) and project.platform:
+                srt = project.get_active_reference_system() if hasattr(project, "get_active_reference_system") else None
+                if not srt:
+                    from ..models import ReferenceSystem
+                    srt = ReferenceSystem(
+                        id="SRT_01",
+                        name=f"{project.ellipsoid_name} / UTM {project.config.get('utm_zone', 30)}N",
+                        ellipsoid=project.ellipsoid_name,
+                        utm_zone=abs(int(project.config.get("utm_zone", 30))),
+                        utm_hemisphere="S" if int(project.config.get("utm_zone", 30)) < 0 else "N",
+                        geoid_undulation_N=geoid_n,
+                        magnetic_declination_deg=decl
+                    )
+                    if hasattr(project, "add_reference_system"):
+                        project.add_reference_system(srt, set_active=True)
+                project.platform.apply_georeferencing_solution(geo_res, srt, method_str=kwargs.get("method", "SVD+INS"))
+
         except Exception as e:
             result.success = False
             result.error_message = f"Error durante el computo de georreferenciacion: {str(e)}"

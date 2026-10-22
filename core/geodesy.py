@@ -89,6 +89,10 @@ def geodetic_to_ecef(
     Retorna:
         np.ndarray de shape (3,) con [X, Y, Z] en metros.
     """
+    from .validation import validate_lat_lon, validate_finite
+    lat_rad, lon_rad = validate_lat_lon(lat_rad, lon_rad)
+    h_m = np.float64(validate_finite(h_m, "h_m"))
+
     _, rn = radii_of_curvature(lat_rad, ell)
     cos_phi = np.cos(lat_rad)
     sin_phi = np.sin(lat_rad)
@@ -124,7 +128,9 @@ def ecef_to_geodetic(
             lon_rad: Longitud geodesica [rad]
             h_m: Altitud elipsoidal [m]
     """
-    x, y, z = np.float64(xyz[0]), np.float64(xyz[1]), np.float64(xyz[2])
+    from .validation import validate_finite
+    xyz_arr = validate_finite(xyz, "xyz")
+    x, y, z = np.float64(xyz_arr[0]), np.float64(xyz_arr[1]), np.float64(xyz_arr[2])
     p = np.hypot(x, y)
 
     # Singularidad en los polos
@@ -207,6 +213,10 @@ def utm_projection(
     Retorna:
         (Easting, Northing, Zone)
     """
+    from .validation import validate_lat_lon, validate_utm_params
+    lat_rad, lon_rad = validate_lat_lon(lat_rad, lon_rad)
+    zone, hemisphere = validate_utm_params(zone, hemisphere)
+
     lon0_deg = np.float64((zone - 1) * 6 - 180 + 3)  # Meridiano central del huso
     lon0_rad = np.radians(lon0_deg)
 
@@ -325,6 +335,11 @@ def utm_inverse(
     Retorna:
         (lat_rad, lon_rad): Latitud y longitud geodésicas en radianes.
     """
+    from .validation import validate_finite, validate_utm_params
+    validate_finite(easting, "easting")
+    validate_finite(northing, "northing")
+    zone, hemisphere = validate_utm_params(zone, hemisphere)
+
     k0 = np.float64(0.9996)
     a = ell.a
     e2 = ell.e2

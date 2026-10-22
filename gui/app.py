@@ -89,7 +89,21 @@ class PyGSNMainWindow(QMainWindow):
         self._init_tool_bar()
         self._init_status_bar()
 
+        # Gestor de notificaciones emergentes no bloqueantes (Toast)
+        from gui.toast import ToastManager
+        self.toast_mgr = ToastManager(self)
+
         self.update_ui_state()
+
+    def show_toast(self, message: str, title: Optional[str] = None, level: str = "info", duration_ms: int = 3500):
+        """Muestra una notificación flotante no bloqueante en la ventana principal."""
+        if hasattr(self, "toast_mgr"):
+            self.toast_mgr.show_toast(message=message, title=title, level=level, duration_ms=duration_ms)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "toast_mgr"):
+            self.toast_mgr._reposition_toasts()
 
     def _init_window(self):
         self.setWindowTitle(f"{self.project.name} - PyGSN")
@@ -1549,6 +1563,7 @@ class PyGSNMainWindow(QMainWindow):
 
     def _on_solution_computed(self, sol, report_text: str):
         self.lbl_status_state.setText("[OK] Georreferenciación y actitud calculadas con éxito")
+        self.show_toast("Georreferenciación y actitud calculadas con éxito.", title="SVD Resuelto", level="success")
         if self.panel_report:
             self.panel_report.set_report_text(report_text)
         self.open_solver_tab()

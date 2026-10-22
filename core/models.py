@@ -966,15 +966,26 @@ class Platform:
 
         imported_sensors: list[Sensor] = []
 
-        def _to_float(v: Any, default: float = 0.0) -> float:
-            if v is None or str(v).strip() == "" or str(v).strip().lower() == "none":
+        def _to_float(v: Any, field_name: str, row_idx: int, default: float = 0.0) -> float:
+            if v is None:
                 return default
+            s = str(v).strip()
+            if not s or s.lower() == "none" or s == "-":
+                return default
+            # Soporte transparente para comas decimales
+            s_clean = s.replace(",", ".")
             try:
-                return float(v)
-            except ValueError:
-                return default
+                val = float(s_clean)
+                if not math.isfinite(val):
+                    raise ValueError("Valor no finito (NaN o Inf)")
+                return val
+            except (ValueError, TypeError) as exc:
+                raise ValueError(
+                    f"Fila {row_idx} ({raw_name}), campo '{field_name}': "
+                    f"el valor '{s}' no es un número válido ({exc})."
+                )
 
-        for row in rows_data:
+        for row_idx, row in enumerate(rows_data, start=2):
             raw_name = row.get(col_map["name"])
             if raw_name is None or str(raw_name).strip() == "":
                 continue
@@ -982,15 +993,15 @@ class Platform:
             code_upper = name_str.upper()
 
             # Extraer lever-arm
-            x1 = _to_float(row.get(col_map.get("x1", "")))
-            x2 = _to_float(row.get(col_map.get("x2", "")))
-            x3 = _to_float(row.get(col_map.get("x3", "")))
+            x1 = _to_float(row.get(col_map.get("x1", "")), "x1", row_idx)
+            x2 = _to_float(row.get(col_map.get("x2", "")), "x2", row_idx)
+            x3 = _to_float(row.get(col_map.get("x3", "")), "x3", row_idx)
             lever_arm = np.array([x1, x2, x3], dtype=np.float64)
 
             # Extraer boresight
-            alpha = _to_float(row.get(col_map.get("alpha", "")))
-            beta = _to_float(row.get(col_map.get("beta", "")))
-            gamma = _to_float(row.get(col_map.get("gamma", "")))
+            alpha = _to_float(row.get(col_map.get("alpha", "")), "alpha", row_idx)
+            beta = _to_float(row.get(col_map.get("beta", "")), "beta", row_idx)
+            gamma = _to_float(row.get(col_map.get("gamma", "")), "gamma", row_idx)
             boresight = (alpha, beta, gamma)
 
             # Extraer observables de campo
@@ -1006,10 +1017,10 @@ class Platform:
                 try:
                     lat_deg = parse_dms_or_deg(str(lat_val))
                     lon_deg = parse_dms_or_deg(str(lon_val))
-                    h_m = _to_float(h_val, 0.0)
+                    h_m = _to_float(h_val, "h_elip", row_idx, default=0.0)
                     obs = SensorObservation(ref_system_id=ref_system_id, geodetic_deg=(lat_deg, lon_deg, h_m))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    raise ValueError(f"Fila {row_idx} ({raw_name}): error en coordenadas geodésicas ({exc}).")
 
             roll_val = row.get(col_map.get("roll_obs", ""))
             pitch_val = row.get(col_map.get("pitch_obs", ""))
@@ -1021,15 +1032,15 @@ class Platform:
 
             if has_att:
                 try:
-                    r_deg = float(roll_val)
-                    p_deg = float(pitch_val)
-                    y_deg = float(yaw_val)
+                    r_deg = float(str(roll_val).replace(",", "."))
+                    p_deg = float(str(pitch_val).replace(",", "."))
+                    y_deg = float(str(yaw_val).replace(",", "."))
                     if obs is None:
                         obs = SensorObservation(ref_system_id=ref_system_id, attitude_rpy_deg=(r_deg, p_deg, y_deg))
                     else:
                         obs.attitude_rpy_deg = (r_deg, p_deg, y_deg)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    raise ValueError(f"Fila {row_idx} ({raw_name}): error en ángulos de actitud ({exc}).")
 
             # Inferencia del tipo de sensor
             if has_geo or "REC" in code_upper or "GNSS" in code_upper or "GPS" in code_upper:
@@ -1266,6 +1277,76 @@ class Platform:
                 pass
 
         return counts
+
+    def apply_georeferencing_solution(
+        self,
+        solution: Any,
+        reference_system: Any,
+        method_str: str = "SVD+INS"
+    ) -> int:
+        """
+        Aplica los resultados del cálculo de georreferenciación a la plataforma y a sus sensores.
+        Actualiza self.pose_e con PlatformPose y sens.georef con SensorGeoref para cada sensor.
+        Retorna la cantidad de sensores actualizados.
+        """
+        from .geodesy import utm_projection
+        sol = solution
+        srt = reference_system
+
+        pla_ecef = sol.pla_origin_ecef
+        lat_d = float(np.degrees(sol.pla_origin_lat_rad))
+        lon_d = float(np.degrees(sol.pla_origin_lon_rad))
+        h_m = float(sol.pla_origin_h_ellip)
+
+        ell = srt.get_ellipsoid() if hasattr(srt, "get_ellipsoid") else getattr(srt, "ellipsoid_obj", None)
+        easting, northing, zone = utm_projection(
+            sol.pla_origin_lat_rad, sol.pla_origin_lon_rad,
+            zone=srt.utm_zone, hemisphere=srt.utm_hemisphere, ell=ell
+        )
+        h_orto = h_m - srt.geoid_undulation_N
+        att = sol.attitude_ins_total_deg if method_str == "INS" else sol.attitude_gnss_deg
+        dcm_b2e = sol.Cb2n_ins @ sol.Ce2n_centroid if method_str == "INS" else (sol.Ce2n_centroid.T @ sol.Cb2n_gnss).T
+
+        self.pose_e = PlatformPose(
+            ref_system_id=srt.id,
+            ref_system_name=srt.name or srt.id,
+            ecef=pla_ecef,
+            lat_deg=lat_d,
+            lon_deg=lon_d,
+            h_ellip_m=h_m,
+            utm_easting_m=float(easting),
+            utm_northing_m=float(northing),
+            utm_zone=int(zone),
+            utm_hemisphere=srt.utm_hemisphere,
+            h_ortho_m=float(h_orto),
+            attitude_rpy_deg=att,
+            dcm_b2e=[[float(v) for v in row] for row in dcm_b2e],
+            method=method_str,
+        )
+
+        count_updated = 0
+        results_map = sol.results_ins if method_str == "INS" else sol.results_gnss
+
+        for sens_code, sens in self.sensors.items():
+            if sens_code in results_map:
+                sr = results_map[sens_code]
+                sens.georef = SensorGeoref(
+                    ref_system_id=srt.id,
+                    ref_system_name=srt.name or srt.id,
+                    ecef=sr.ecef,
+                    lat_deg=float(np.degrees(sr.lat_rad)),
+                    lon_deg=float(np.degrees(sr.lon_rad)),
+                    h_ellip_m=float(sr.h_ellip),
+                    utm_easting_m=float(sr.easting),
+                    utm_northing_m=float(sr.northing),
+                    utm_zone=int(sr.zone),
+                    utm_hemisphere=srt.utm_hemisphere,
+                    h_ortho_m=float(sr.h_orto),
+                    computed_via=method_str,
+                )
+                count_updated += 1
+
+        return count_updated
 
 
 
