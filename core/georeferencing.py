@@ -139,13 +139,12 @@ def solve_multisensor_georeferencing(
             if g_obs is not None:
                 gnss_observations[c] = g_obs
 
-    if gnss_sensor_codes is None:
-        gnss_sensor_codes = [c for c in gnss_observations.keys() if c in platform.sensors]
-        if len(gnss_sensor_codes) < 3:
-            raise ValueError(
-                f"Se requieren al menos 3 antenas GNSS coincidentes entre la plataforma y las observaciones "
-                f"(encontradas: {len(gnss_sensor_codes)})."
-            )
+    from .validation import validate_sensor_codes_and_obs
+    gnss_sensor_codes = validate_sensor_codes_and_obs(
+        platform.sensors,
+        gnss_observations,
+        required_codes=gnss_sensor_codes
+    )
 
     # Auto-detección de actitud INS si no se proporciona
     if ins_attitude_deg is None:

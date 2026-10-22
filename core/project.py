@@ -70,6 +70,8 @@ class Project:
         if self.reference_systems and (not self.active_reference_system_id or self.active_reference_system_id not in self.reference_systems):
             self.active_reference_system_id = next(iter(self.reference_systems.keys()))
 
+        self._last_solution: Any = None
+
     @property
     def platform(self) -> Platform | None:
         """Devuelve la plataforma activa o None si no hay plataformas en el proyecto."""
@@ -252,3 +254,123 @@ class Project:
         """Importa una plataforma y sensores desde un archivo TXT."""
         content = Path(filepath).read_text(encoding="utf-8")
         self.platform = Platform.from_txt(content)
+
+    # -------------------------------------------------------------------------
+    # API de Alto Nivel: Georreferenciación, Importación y Reportes
+    # -------------------------------------------------------------------------
+    def solve_georeferencing(
+        self,
+        reference_system_id: str | None = None,
+        method: str = "SVD+INS",
+        apply_to_platform: bool = True
+    ) -> Any:
+        """
+        Ejecuta la georreferenciación multipunto de la plataforma activa.
+        Soporta resolución b-frame <-> e-frame y actualiza platform.pose_e y sens.georef.
+        """
+        from .georeferencing import solve_multisensor_georeferencing
+
+        plat = self.platform
+        if not plat:
+            raise ValueError(f"El proyecto '{self.name}' no tiene ninguna plataforma activa para georreferenciar.")
+
+        rs_id = reference_system_id or self.active_reference_system_id
+        srt = self.get_reference_system(rs_id) if rs_id else self.get_active_reference_system()
+        if not srt:
+            # Crear un SRT por defecto a partir de la configuración del proyecto
+            srt = ReferenceSystem(
+                id="SRT_01",
+                name=f"{self.ellipsoid_name} / UTM {self.config.get('utm_zone', 30)}N",
+                ellipsoid=self.ellipsoid_name,
+                utm_zone=abs(int(self.config.get("utm_zone", 30))),
+                utm_hemisphere="S" if int(self.config.get("utm_zone", 30)) < 0 else "N",
+                geoid_undulation_N=float(self.config.get("geoid_undulation_n", 0.0)),
+                magnetic_declination_deg=float(self.config.get("mag_declination_deg", 0.0))
+            )
+            self.add_reference_system(srt, set_active=True)
+
+        sol = solve_multisensor_georeferencing(
+            platform=plat,
+            reference_system=srt
+        )
+
+        if apply_to_platform:
+            plat.apply_georeferencing_solution(
+                solution=sol,
+                reference_system=srt,
+                method_str=method
+            )
+
+        self._last_solution = sol
+        return sol
+
+    def import_sensors_from_table(
+        self,
+        file_path: str | Path,
+        platform_id: str | None = None
+    ) -> list[Sensor]:
+        """
+        Importa sensores y observaciones desde tabla (.xlsx, .csv, .txt) a la plataforma activa.
+        """
+        plat = self.get_platform(platform_id) if platform_id else self.platform
+        if not plat:
+            plat = Platform(id="PLAT_01", name="Plataforma Principal")
+            self.add_platform(plat, set_active=True)
+
+        active_rs = self.active_reference_system_id
+        return plat.import_sensors_from_table(file_path, ref_system_id=active_rs)
+
+    def export_report(
+        self,
+        output_path: str | Path | None = None,
+        author: str | None = None,
+        method: str = "SVD+INS"
+    ) -> str:
+        """
+        Genera el informe técnico de georreferenciación y opcionalmente lo guarda en disco.
+        """
+        from .reporting import generate_georeferencing_report
+
+        sol = self._last_solution
+        if sol is None:
+            sol = self.solve_georeferencing(method=method, apply_to_platform=True)
+
+        auth = author or self.metadata.get("author", "PyGSN Engineer")
+        report_text = generate_georeferencing_report(
+            sol=sol,
+            author=auth,
+            project=self.name,
+            doc_id=self.metadata.get("doc_id", "PyGSN-GEOREF-SOLVER")
+        )
+
+        if output_path is not None:
+            p = Path(output_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(report_text, encoding="utf-8")
+
+        return report_text
+
+    def get_summary(self) -> dict[str, Any]:
+        """
+        Retorna un resumen estructurado del proyecto, su plataforma activa y estado de cálculo.
+        """
+        plat = self.platform
+        srt = self.get_active_reference_system()
+        has_pose = plat.pose_e is not None if plat else False
+
+        summary = {
+            "name": self.name,
+            "description": self.description,
+            "ellipsoid": self.ellipsoid_name,
+            "active_srt": srt.to_dict() if srt else None,
+            "platforms_count": len(self.platforms),
+            "active_platform": {
+                "id": plat.id if plat else None,
+                "name": plat.name if plat else None,
+                "sensors_count": len(plat.sensors) if plat else 0,
+                "has_dimensions": plat.has_dimensions if plat else False,
+                "has_pose": has_pose,
+                "pose_e": plat.pose_e.to_dict() if (plat and has_pose) else None,
+            } if plat else None
+        }
+        return summary

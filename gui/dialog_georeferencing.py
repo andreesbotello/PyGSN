@@ -1115,59 +1115,12 @@ class DialogGeoreferencingSolver(BaseDialog):
         elif self.radio_source_both.isChecked():
             method_str = "SVD+INS"
 
-        # 1. Pose del centro de la plataforma (PLA)
-        pla_ecef = sol.pla_origin_ecef
-        lat_d = float(np.degrees(sol.pla_origin_lat_rad))
-        lon_d = float(np.degrees(sol.pla_origin_lon_rad))
-        h_m = float(sol.pla_origin_h_ellip)
-
-        easting, northing, zone = utm_projection(
-            sol.pla_origin_lat_rad, sol.pla_origin_lon_rad,
-            zone=srt.utm_zone, hemisphere=srt.utm_hemisphere, ell=srt.ellipsoid_obj
+        # Delegación al método desacoplado de Platform en core
+        count_updated = plat.apply_georeferencing_solution(
+            solution=sol,
+            reference_system=srt,
+            method_str=method_str
         )
-        h_orto = h_m - srt.geoid_undulation_N
-        att = sol.attitude_ins_total_deg if method_str == "INS" else sol.attitude_gnss_deg
-        dcm_b2e = sol.Cb2n_ins @ sol.Ce2n_centroid if method_str == "INS" else (sol.Ce2n_centroid.T @ sol.Cb2n_gnss).T
-
-        plat.pose_e = PlatformPose(
-            ref_system_id=srt.id,
-            ref_system_name=srt.name or srt.id,
-            ecef=pla_ecef,
-            lat_deg=lat_d,
-            lon_deg=lon_d,
-            h_ellip_m=h_m,
-            utm_easting_m=float(easting),
-            utm_northing_m=float(northing),
-            utm_zone=int(zone),
-            utm_hemisphere=srt.utm_hemisphere,
-            h_ortho_m=float(h_orto),
-            attitude_rpy_deg=att,
-            dcm_b2e=[[float(v) for v in row] for row in dcm_b2e],
-            method=method_str,
-        )
-
-        # 2. Enriquecimiento de cada sensor de la plataforma
-        count_updated = 0
-        results_map = sol.results_ins if method_str == "INS" else sol.results_gnss
-
-        for sens_code, sens in plat.sensors.items():
-            if sens_code in results_map:
-                sr = results_map[sens_code]
-                sens.georef = SensorGeoref(
-                    ref_system_id=srt.id,
-                    ref_system_name=srt.name or srt.id,
-                    ecef=sr.ecef,
-                    lat_deg=float(np.degrees(sr.lat_rad)),
-                    lon_deg=float(np.degrees(sr.lon_rad)),
-                    h_ellip_m=float(sr.h_ellip),
-                    utm_easting_m=float(sr.easting),
-                    utm_northing_m=float(sr.northing),
-                    utm_zone=int(sr.zone),
-                    utm_hemisphere=srt.utm_hemisphere,
-                    h_ortho_m=float(sr.h_orto),
-                    computed_via=method_str,
-                )
-                count_updated += 1
 
         # Notificar a la ventana principal de cambios pendientes
         parent_w = self.parent()

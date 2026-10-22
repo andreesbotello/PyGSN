@@ -121,10 +121,41 @@ def run_cli_georeferencing(
     print("=" * 80)
 
 
+def run_interactive_cli(project_file: str | None = None):
+    """Inicia una sesión interactiva REPL pura en la consola del sistema operativo."""
+    from core.cli_engine import CLIEngine
+    from core.project import Project
+
+    if project_file and Path(project_file).exists():
+        proj = Project.load(project_file)
+        print(f"> Proyecto cargado: {project_file}")
+    else:
+        proj = Project(name="Proyecto CLI")
+
+    engine = CLIEngine(project=proj)
+    print("=" * 80)
+    print("PyGSN - Terminal Interactiva CLI (Modo Independiente Headless)")
+    print("Escriba 'help' para ver la lista de comandos disponibles o 'exit' para salir.")
+    print("=" * 80)
+
+    while True:
+        try:
+            line = input("pygsn> ")
+            cont = engine.execute(line)
+            if not cont:
+                break
+        except (KeyboardInterrupt, EOFError):
+            print("\nSaliendo de PyGSN CLI.")
+            break
+        except Exception as e:
+            print(f"[ERROR INESPERADO] {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="PyGSN - Georreferenciación de Sensores y Navegación")
-    parser.add_argument("--cli", action="store_true", help="Ejecutar en modo consola sin interfaz gráfica")
-    parser.add_argument("--run", action="store_true", help="Ejecutar resolución completa en consola")
+    parser.add_argument("--cli", "-c", "-i", "--interactive", action="store_true",
+                        help="Ejecutar terminal interactiva CLI en consola pura (sin GUI)")
+    parser.add_argument("--run", action="store_true", help="Ejecutar resolución completa en consola (modo batch)")
     parser.add_argument("--demo", action="store_true", help="Ejecutar demostración de cálculo multisensor")
     parser.add_argument("--p1", action="store_true", help="Alias de compatibilidad")
     parser.add_argument("--project", type=str, default=None, help="Ruta al archivo de proyecto .pygsn")
@@ -142,6 +173,10 @@ def main():
         runner = unittest.TextTestRunner(verbosity=2)
         result = runner.run(suite)
         sys.exit(0 if result.wasSuccessful() else 1)
+
+    if args.cli:
+        run_interactive_cli(args.project)
+        sys.exit(0)
 
     if args.project:
         from core.project import Project
@@ -161,11 +196,11 @@ def main():
             print(f"> Informe guardado exitosamente en: {args.output}")
         sys.exit(0)
 
-    if args.cli or args.run or args.demo or args.p1:
+    if args.run or args.demo or args.p1:
         run_cli_georeferencing(args.output, args.body, args.obs)
         sys.exit(0)
 
-    # Modo gráfico interactivo
+    # Modo gráfico interactivo por defecto
     from gui.app import PyGSNApp
     app = PyGSNApp()
     app.run()

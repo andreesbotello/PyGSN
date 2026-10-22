@@ -407,12 +407,14 @@ class TestGeoreferencingWorkflow(unittest.TestCase):
     def test_import_sensors_from_table_excel(self):
         """Valida la importación completa desde tabla Excel (.xlsx) con geometría y observables."""
         from pathlib import Path
-        excel_path = Path(r"c:\Users\bryan\Desktop\UPV\S3\2_Sensores\Practica1\plataforma.xlsx")
-        if not excel_path.exists():
-            self.skipTest("plataforma.xlsx no encontrado")
+        table_path = Path(__file__).resolve().parent.parent / "data" / "calibracion_rig_multisensor.csv"
+        if not table_path.exists():
+            table_path = Path(r"c:\Users\bryan\Desktop\UPV\S3\2_Sensores\Practica1\plataforma.xlsx")
+        if not table_path.exists():
+            self.skipTest("Tabla de sensores no encontrada")
 
-        plat = Platform(name="Plataforma Excel")
-        imported = plat.import_sensors_from_table(excel_path)
+        plat = Platform(name="Plataforma Calibracion")
+        imported = plat.import_sensors_from_table(table_path)
 
         self.assertEqual(len(imported), 7)
         self.assertIn("REC2", plat.sensors)

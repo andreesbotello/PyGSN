@@ -27,21 +27,16 @@ def kabsch_orthogonal_procrustes(
             centroid_to:   Centroide del marco destino (3,)
             residuals:     Residuales de ajuste (3, N)
     """
-    pts_from = np.asarray(points_from, dtype=np.float64)
-    pts_to = np.asarray(points_to, dtype=np.float64)
+    from .validation import validate_antenna_geometry
 
-    # Asegurar shape (3, N)
-    if pts_from.shape[0] != 3 and pts_from.shape[1] == 3:
-        pts_from = pts_from.T
-    if pts_to.shape[0] != 3 and pts_to.shape[1] == 3:
-        pts_to = pts_to.T
+    # Validar finitud, dimensión y rango no colineal (rango >= 2)
+    pts_from = validate_antenna_geometry(points_from, min_points=3)
+    pts_to = validate_antenna_geometry(points_to, min_points=3)
 
     if pts_from.shape != pts_to.shape:
         raise ValueError(f"Las dimensiones de los puntos no coinciden: {pts_from.shape} vs {pts_to.shape}")
 
     n_points = pts_from.shape[1]
-    if n_points < 3:
-        raise ValueError(f"Se requieren al menos 3 puntos no colineales para determinar la orientacion 3D (dados: {n_points})")
 
     # Centroides
     centroid_from = np.mean(pts_from, axis=1, keepdims=True)

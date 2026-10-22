@@ -15,7 +15,7 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-if python3 -c "import numpy, scipy, dearpygui" > /dev/null 2>&1; then
+if python3 -c "import numpy, scipy, PySide6" > /dev/null 2>&1; then
     PYTHON_EXE="python3"
 else
     if [ ! -f ".venv/bin/python" ]; then

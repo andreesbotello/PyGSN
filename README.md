@@ -15,7 +15,7 @@ El proyecto está diseñado para ejecutarse **de inmediato sin configuración ma
 ### Opción A: Lanzamiento en 1 Clic (Windows)
 1. Descargue o clone el repositorio de GitHub.
 2. Haga **doble clic en `run.bat`**.
-   - *El script detecta Python, crea automáticamente un entorno virtual aislado (`.venv`), instala las dependencias (`numpy`, `scipy`, `dearpygui`) y abre la interfaz gráfica.*
+   - *El script detecta Python, crea automáticamente un entorno virtual aislado (`.venv`), instala las dependencias (`numpy`, `scipy`, `PySide6`, `openpyxl`) y abre la interfaz gráfica.*
 
 ### Opción B: Ejecución Directa por Terminal (Modo CLI sin GUI)
 Si se requiere procesar por lotes o en entornos headless sin interfaz gráfica:
@@ -58,7 +58,7 @@ El software modela la cinemática y la geometría de los 5 marcos de referencia:
 
 ---
 
-## Interfaz Gráfica: 3 Vistas Ortogonales 2D Técnicas (DearPyGui)
+## Interfaz Gráfica: 3 Vistas Ortogonales 2D Técnicas y Workspace e-frame (PySide6 / Qt6)
 
 Siguiendo principios de diseño CAD y dibujo técnico, **no se utiliza renderizado 3D perspectivo**, garantizando máxima precisión visual y rapidez:
 
@@ -104,7 +104,7 @@ PyGSN/
 ├── scripts/
 │   └── build_exe.py             # Script para compilar ejecutable standalone con PyInstaller
 ├── main.py                      # Punto de entrada universal (CLI / GUI / Tests)
-├── requirements.txt             # Dependencias de Python (NumPy, SciPy, DearPyGui)
+├── requirements.txt             # Dependencias de Python (NumPy, SciPy, PySide6, openpyxl)
 ├── pyproject.toml               # Configuración de paquete pip estándar
 ├── run.bat                      # Lanzador de 1 clic para Windows
 ├── run.sh                       # Lanzador de 1 clic para Linux/macOS
