@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "PyGSN"
 version = "1.0.0"
-description = "Herramienta de Transformación de Sistemas de Coordenadas y Georreferenciación de Sensores (UPV - S3)"
+description = "Herramienta de Transformación de Sistemas de Coordenadas y Georreferenciación de Sensores"
 authors = [
     { name = "Bryan Andres Botello", email = "andreesbotello@gmail.com" }
 ]

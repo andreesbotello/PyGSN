@@ -48,7 +48,7 @@ def generate_georeferencing_report(
     doc.append(f"Fecha de Cálculo:  {now_str}")
     doc.append(f"Elipsoide:         {ell.name} (a = {ell.a:.4f} m, 1/f = {ell.inv_f:.12f})")
     doc.append(f"Ondulación Geoide: N = {sol.geoid_undulation_N:.4f} m")
-    doc.append(f"Declinación Mag.:  δ = {sol.magnetic_declination_deg:+.4f} deg")
+    doc.append(f"Declinación Mag.:  D = {sol.magnetic_declination_deg:+.4f} deg (IGRF/WMM, Este +; psi = psi_mag + D)")
     doc.append("-" * 90)
     doc.append("")
 
@@ -172,7 +172,7 @@ def generate_georeferencing_report(
     doc.append("=" * 90)
     r_i, p_i, y_i = sol.ins_attitude_deg
     doc.append(f"4.1. Actitud INS (Norte Magnético): Roll={r_i:.6f}º, Pitch={p_i:.6f}º, Yaw={y_i:.6f}º")
-    doc.append(f"   Declinación Magnética Local: {sol.magnetic_declination_deg:+.6f} deg")
+    doc.append(f"   Declinación Magnética Local: D = {sol.magnetic_declination_deg:+.6f} deg (IGRF/WMM, Este positivo)")
     doc.append("")
     doc.append("4.2. Matriz Cs2b (Desalineamiento Boresight INS s-frame -> b-frame):")
     doc.append(format_matrix_3x3(sol.Cs2b_ins))
@@ -205,6 +205,10 @@ def generate_georeferencing_report(
         doc.append(f"   {code:6s}   {dE:17.4f}   {dN:17.4f}   {dH:13.4f}    {code}")
 
     doc.append("")
+    unc = getattr(sol, "attitude_uncertainty", None)
+    if unc is not None:
+        doc.extend(_format_uncertainty_section(unc))
+
     doc.append("=" * 90)
     doc.append("FIN DEL INFORME TÉCNICO DE GEORREFERENCIACIÓN Y NAVEGACIÓN")
     doc.append("Generado automáticamente por PyGSN (Georreferenciación de Sensores y Navegación)")
@@ -213,5 +217,31 @@ def generate_georeferencing_report(
     return "\n".join(doc)
 
 
-# Aliases de compatibilidad
-generate_reference_txt_report = generate_georeferencing_report
+def _format_uncertainty_section(unc) -> list[str]:
+    """Sección 6: incertidumbre a posteriori de la actitud GNSS y consistencia con el INS."""
+    out = []
+    out.append("=" * 90)
+    out.append("SECCIÓN 6: INCERTIDUMBRE A POSTERIORI Y CONSISTENCIA GNSS - INS")
+    out.append("=" * 90)
+    out.append("   Modelo: ruido isótropo por antena; linealización de ángulos pequeños en n-frame.")
+    out.append(f"6.1. Desviación típica a posteriori: sigma0 = {unc.sigma0_m * 1e3:.2f} mm "
+               f"(grados de libertad 3N-6 = {unc.dof})")
+    out.append(f"     Número de condición de la geometría de antenas: {unc.geometry_condition:.2f}")
+    sr, sp, sy = unc.sigma_rpy_deg
+    out.append(f"6.2. Sigma de actitud GNSS: Roll={sr:.4f}º, Pitch={sp:.4f}º, Yaw={sy:.4f}º")
+    out.append("")
+    out.append("6.3. Precisión propagada a los sensores (1 sigma, n-frame):")
+    out.append("   Sensor     sigma N (mm)   sigma E (mm)   sigma D (mm)")
+    out.append("   ------     ------------   ------------   ------------")
+    for code, (sn, se, sd) in unc.sensor_sigma_ned_m.items():
+        out.append(f"   {code:6s}     {sn * 1e3:12.2f}   {se * 1e3:12.2f}   {sd * 1e3:12.2f}")
+    out.append("")
+    out.append(f"6.4. Discrepancia de actitud GNSS - INS (umbral {unc.significance_threshold:.1f} sigma):")
+    out.append("   Ángulo     Diferencia (º)   |dif|/sigma_GNSS   Significativa")
+    out.append("   ------     --------------   ----------------   -------------")
+    flags = unc.gnss_ins_significant
+    for name, d, r, f in zip(("Roll", "Pitch", "Yaw"), unc.gnss_ins_diff_deg, unc.gnss_ins_ratio, flags):
+        out.append(f"   {name:6s}     {d:14.4f}   {r:16.2f}   {'SI' if f else 'NO':>13s}")
+    out.append("   Nota: el cociente solo incluye la incertidumbre GNSS (cota superior de la significancia).")
+    out.append("")
+    return out

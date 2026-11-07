@@ -34,8 +34,8 @@ class GeoreferencingWidget(QWidget):
 
         self.gnss_observations: Dict[str, Tuple[float, float, float]] = {}
         self.ins_attitude_deg: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-        self.magnetic_declination_deg: float = -0.700
-        self.geoid_undulation_n: float = 50.0166
+        self.magnetic_declination_deg: float = 0.0   # D [deg], IGRF/WMM (Este positivo)
+        self.geoid_undulation_n: float = 0.0         # N [m]
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -110,8 +110,8 @@ class GeoreferencingWidget(QWidget):
             data = parse_observations_content(content)
             self.gnss_observations = data.get("gnss_observations", {})
             self.ins_attitude_deg = data.get("ins_attitude_deg", (0.0, 0.0, 0.0))
-            self.magnetic_declination_deg = data.get("magnetic_declination_deg", -0.700)
-            self.geoid_undulation_n = data.get("geoid_undulation_N", 50.0166)
+            self.magnetic_declination_deg = data.get("magnetic_declination_deg", 0.0)
+            self.geoid_undulation_n = data.get("geoid_undulation_N", 0.0)
             self._update_obs_table()
         except Exception as e:
             QMessageBox.critical(self, "Error al Cargar Observaciones", f"No se pudo parsear el archivo: {str(e)}")

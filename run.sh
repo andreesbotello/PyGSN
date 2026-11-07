@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 
 echo "==============================================================================="
 echo "             PyGSN - Sistema de Transformación de Coordenadas"
-echo "       Georreferenciación de Sensores y Navegación Inercial (UPV - S3)"
+echo "           Georreferenciación de Sensores y Navegación Inercial"
 echo "==============================================================================="
 
 if ! command -v python3 &> /dev/null; then

@@ -29,7 +29,9 @@ from .rotations import (
 )
 from .alignment import kabsch_orthogonal_procrustes
 from .kinematics import propagate_lever_arm_ecef, solve_origin_from_centroid_ecef
-from .validation import validate_finite, validate_attitude_angles, validate_sensor_codes_and_obs
+from .validation import (
+    validate_finite, validate_attitude_angles, validate_sensor_codes_and_obs, validate_safe_division
+)
 
 
 @dataclass
@@ -44,6 +46,30 @@ class SensorResult:
     northing: np.float64         # Proyección UTM Norte (m)
     zone: int                    # Huso UTM
     h_orto: np.float64           # Altitud ortométrica (m)
+
+
+@dataclass
+class AttitudeUncertainty:
+    """
+    Incertidumbre a posteriori de la orientación estimada por Procrustes (Kabsch).
+
+    Modelo: r_i^n = Cb2n (b_i - b_bar) + e_i, con e_i ~ N(0, sigma0^2 I) isótropo.
+    Linealización por ángulos pequeños en n-frame: Cb2n_true = Exp([theta x]) Cb2n_est.
+    """
+    sigma0_m: float                                     # Desviación típica a posteriori [m]
+    dof: int                                            # Grados de libertad 3N - 6
+    cov_theta_n: np.ndarray                             # Covarianza de theta en n-frame [rad^2] (3x3)
+    sigma_rpy_deg: tuple[float, float, float]           # sigma(roll, pitch, yaw) [deg]
+    geometry_condition: float                           # Número de condición de la matriz normal
+    sensor_sigma_ned_m: dict[str, tuple[float, float, float]] = field(default_factory=dict)  # sigma N,E,D [m]
+    gnss_ins_diff_deg: tuple[float, float, float] = (0.0, 0.0, 0.0)  # GNSS - INS (r, p, y) [deg]
+    gnss_ins_ratio: tuple[float, float, float] = (0.0, 0.0, 0.0)     # |diff| / sigma_GNSS
+    significance_threshold: float = 3.0
+
+    @property
+    def gnss_ins_significant(self) -> tuple[bool, bool, bool]:
+        """True en cada ángulo cuya discrepancia GNSS-INS supera el umbral (por defecto 3 sigma)."""
+        return tuple(bool(r > self.significance_threshold) for r in self.gnss_ins_ratio)
 
 
 @dataclass
@@ -92,22 +118,12 @@ class GeoreferencingSolution:
     ortho_error_dcm: float = 0.0
     reference_system: Any = None
 
-    # Aliases de compatibilidad para evitar rupturas de código previo
-    @property
-    def results_2a(self) -> dict[str, SensorResult]:
-        return self.results_gnss
+    # Matrices b-frame -> e-frame efectivamente usadas en la propagación (Cb2e = Cn2e(PLA) @ Cb2n)
+    Cb2e_gnss: np.ndarray | None = None
+    Cb2e_ins: np.ndarray | None = None
 
-    @property
-    def results_2b(self) -> dict[str, SensorResult]:
-        return self.results_ins
-
-    @property
-    def diff_2a_2b_utm(self) -> dict[str, tuple[float, float, float]]:
-        return self.diff_gnss_ins_utm
-
-
-# Alias de compatibilidad
-LegacySolution = GeoreferencingSolution
+    # Incertidumbre a posteriori de la actitud GNSS y consistencia con el INS
+    attitude_uncertainty: AttitudeUncertainty | None = None
 
 
 # =============================================================================
@@ -226,7 +242,10 @@ def solve_attitude_ins_chain(
     """
     Paso 6: Calcula la orientación Cb2n estimada por el sensor INS, encadenando actitud
     medida en n-frame magnético, corrección por declinación geomagnética y boresight:
-        Cb2n = Cmn2gn(delta) @ Cs2n_mn(r,p,y) @ (Cs2b(alpha,beta,gamma))^T
+        Cb2n = Cmn2gn(D) @ Cs2n_mn(r,p,y) @ (Cs2b(alpha,beta,gamma))^T,  Cmn2gn(D) = R3(-D)
+
+    magnetic_declination_deg: declinación D [deg], convención IGRF/WMM (Este positivo),
+    de modo que psi_geodésico = psi_magnético + D.
     """
     r_ins = np.radians(ins_attitude_deg[0])
     p_ins = np.radians(ins_attitude_deg[1])
@@ -321,6 +340,114 @@ def compute_consistency_residuals(
     return diff_utm
 
 
+def _skew(v: np.ndarray) -> np.ndarray:
+    """Matriz antisimétrica [v x] tal que [v x] @ w = v x w."""
+    return np.array([
+        [0.0, -v[2], v[1]],
+        [v[2], 0.0, -v[0]],
+        [-v[1], v[0], 0.0]
+    ], dtype=np.float64)
+
+
+def _small_rotation(theta: np.ndarray) -> np.ndarray:
+    """Exp([theta x]) por la fórmula de Rodrigues (theta en rad, n-frame)."""
+    ang = float(np.linalg.norm(theta))
+    if ang < 1e-15:
+        return np.eye(3, dtype=np.float64)
+    K = _skew(theta / ang)
+    return np.eye(3) + np.sin(ang) * K + (1.0 - np.cos(ang)) * (K @ K)
+
+
+def compute_attitude_uncertainty(
+    lever_arms_b: dict[str, np.ndarray],
+    gnss_vectors_n: dict[str, np.ndarray],
+    codes: list[str],
+    Cb2n: np.ndarray,
+    attitude_ins_deg: tuple[float, float, float] | None = None,
+    devices_b: dict[str, np.ndarray] | None = None,
+    significance_threshold: float = 3.0
+) -> AttitudeUncertainty:
+    """
+    Paso 10: Incertidumbre a posteriori de la actitud Kabsch y propagación a los sensores.
+
+    1. Residuales en n-frame: v_i = dr_i^n - Cb2n (b_i - b_bar)  (dr_i^n reducidos al centroide).
+    2. sigma0^2 = sum ||v_i||^2 / (3N - 6).
+    3. Matriz normal: M = sum [q_i x]^T [q_i x],  q_i = Cb2n (b_i - b_bar);  Cov(theta) = sigma0^2 M^-1.
+    4. Cov(roll, pitch, yaw) = J Cov(theta) J^T, con J jacobiano numérico (diferencias centradas).
+    5. Sensor s: Cov_s^n = sigma0^2 / N I + [q_s x] Cov(theta) [q_s x]^T,  q_s = Cb2n (b_s - b_bar).
+    6. Consistencia con el INS: |angulo_GNSS - angulo_INS| / sigma_GNSS (no incluye la incertidumbre
+       del INS, que no es observable aquí: el cociente es una cota superior de la significancia).
+
+    Unidades: metros, radianes internamente; salidas angulares en grados.
+    """
+    C = validate_finite(Cb2n, name="Cb2n")
+    pts_b = np.array([lever_arms_b[c] for c in codes], dtype=np.float64).T
+    pts_n = np.array([gnss_vectors_n[c] for c in codes], dtype=np.float64).T
+    n_pts = pts_b.shape[1]
+
+    b_bar = pts_b.mean(axis=1, keepdims=True)
+    q = C @ (pts_b - b_bar)
+    v = (pts_n - pts_n.mean(axis=1, keepdims=True)) - q
+
+    dof = 3 * n_pts - 6
+    sigma0 = float(np.sqrt(np.sum(v * v) / dof)) if dof > 0 else 0.0
+
+    M = np.zeros((3, 3), dtype=np.float64)
+    for i in range(n_pts):
+        Q = _skew(q[:, i])
+        M += Q.T @ Q
+    # La geometría no colineal está garantizada por validate_antenna_geometry (Kabsch): M es regular.
+    cond = float(np.linalg.cond(M))
+    cov_theta = (sigma0 ** 2) * np.linalg.inv(M)
+
+    # Jacobiano numérico d(roll, pitch, yaw)/d(theta)
+    r0 = np.array(dcm_to_attitude(C), dtype=np.float64)
+    h = 1e-6
+    J = np.zeros((3, 3), dtype=np.float64)
+    for k in range(3):
+        dth = np.zeros(3)
+        dth[k] = h
+        rp = np.array(dcm_to_attitude(_small_rotation(dth) @ C))
+        rm = np.array(dcm_to_attitude(_small_rotation(-dth) @ C))
+        d = rp - rm
+        d = (d + np.pi) % (2.0 * np.pi) - np.pi      # continuidad del yaw en 0/2pi
+        J[:, k] = d / (2.0 * h)
+    cov_rpy = J @ cov_theta @ J.T
+    sigma_rpy = np.sqrt(np.clip(np.diag(cov_rpy), 0.0, None))
+    sigma_rpy_deg = tuple(float(x) for x in np.degrees(sigma_rpy))
+
+    sensor_sigma: dict[str, tuple[float, float, float]] = {}
+    if devices_b:
+        cov_c = (sigma0 ** 2 / n_pts) * np.eye(3)
+        for code, xb in devices_b.items():
+            qs = C @ (np.asarray(xb, dtype=np.float64) - b_bar.ravel())
+            Qs = _skew(qs)
+            cov_s = cov_c + Qs @ cov_theta @ Qs.T
+            s = np.sqrt(np.clip(np.diag(cov_s), 0.0, None))
+            sensor_sigma[code] = (float(s[0]), float(s[1]), float(s[2]))
+
+    diff_deg = (0.0, 0.0, 0.0)
+    ratio = (0.0, 0.0, 0.0)
+    if attitude_ins_deg is not None:
+        g = np.degrees(r0)
+        d = (g - np.asarray(attitude_ins_deg, dtype=np.float64) + 180.0) % 360.0 - 180.0
+        diff_deg = tuple(float(x) for x in d)
+        sig = np.degrees(sigma_rpy)
+        ratio = tuple(float(x) for x in validate_safe_division(np.abs(d), sig, eps=1e-15, default=0.0))
+
+    return AttitudeUncertainty(
+        sigma0_m=sigma0,
+        dof=dof,
+        cov_theta_n=cov_theta,
+        sigma_rpy_deg=sigma_rpy_deg,
+        geometry_condition=cond,
+        sensor_sigma_ned_m=sensor_sigma,
+        gnss_ins_diff_deg=diff_deg,
+        gnss_ins_ratio=ratio,
+        significance_threshold=float(significance_threshold),
+    )
+
+
 # =============================================================================
 # Pipeline Matemático Puro Integrado
 # =============================================================================
@@ -331,8 +458,8 @@ def solve_georeferencing_pipeline(
     gnss_sensor_codes: list[str],
     ins_attitude_deg: tuple[float, float, float] = (0.0, 0.0, 0.0),
     ins_boresight_deg: tuple[float, float, float] = (0.0, 0.0, 0.0),
-    magnetic_declination_deg: float = -0.700,
-    geoid_undulation_N: float = 50.0166,
+    magnetic_declination_deg: float = 0.0,
+    geoid_undulation_N: float = 0.0,
     ellipsoid: Ellipsoid = GRS80,
     utm_zone: int = 30,
     utm_hemisphere: str = "N",
@@ -341,6 +468,10 @@ def solve_georeferencing_pipeline(
     """
     Pipeline matemático funcional y determinista que ejecuta la cadena completa
     de georreferenciación multipunto a partir de entradas numéricas puras.
+
+    magnetic_declination_deg: declinación D [deg], IGRF/WMM (Este positivo).
+    geoid_undulation_N: ondulación del geoide N [m] (H = h - N).
+    Ambos parámetros son propios del lugar: deben venir del SRT; 0.0 significa "no aplicar".
     """
     # 1. Observaciones GNSS a ECEF
     gnss_ecef = gnss_observations_to_ecef(gnss_observations, ell=ellipsoid)
@@ -401,6 +532,12 @@ def solve_georeferencing_pipeline(
 
     diff_gnss_ins_utm = compute_consistency_residuals(results_gnss, results_ins)
 
+    # 11. Incertidumbre a posteriori de la actitud y consistencia GNSS vs INS
+    attitude_unc = compute_attitude_uncertainty(
+        lever_arms_b=lever_arms_b, gnss_vectors_n=gnss_vectors_n, codes=gnss_sensor_codes,
+        Cb2n=Cb2n_gnss, attitude_ins_deg=attitude_ins_total_deg, devices_b=all_devices_b
+    )
+
     return GeoreferencingSolution(
         ellipsoid=ellipsoid,
         geoid_undulation_N=geoid_undulation_N,
@@ -433,7 +570,10 @@ def solve_georeferencing_pipeline(
         residuals_gnss_m=residuals_gnss_m,
         det_dcm=det_dcm,
         ortho_error_dcm=ortho_error_dcm,
-        reference_system=reference_system
+        reference_system=reference_system,
+        Cb2e_gnss=Cb2e_1,
+        Cb2e_ins=Cb2e_ins,
+        attitude_uncertainty=attitude_unc
     )
 
 
@@ -445,8 +585,8 @@ def solve_multisensor_georeferencing(
     platform: Any,
     gnss_observations: dict[str, tuple[np.float64, np.float64, np.float64]] | None = None,
     ins_attitude_deg: tuple[float, float, float] | None = None,
-    magnetic_declination_deg: float = -0.700,
-    geoid_undulation_N: float = 50.0166,
+    magnetic_declination_deg: float = 0.0,
+    geoid_undulation_N: float = 0.0,
     ellipsoid: Ellipsoid = GRS80,
     gnss_sensor_codes: list[str] | None = None,
     ins_sensor_code: str | None = None,
@@ -544,8 +684,3 @@ def create_reference_platform() -> Any:
     plat.add_sensor(Sensor(code="CAM2", name="Cámara Frontal Der", sensor_type=SensorType.CAMERA,
                            lever_arm_b=np.array([0.7, 0.15, -0.080]), boresight_deg=(-0.287495, 0.426588, 1.128792)))
     return plat
-
-
-# Aliases
-solve_reference_rig = solve_multisensor_georeferencing
-create_default_reference_platform = create_reference_platform

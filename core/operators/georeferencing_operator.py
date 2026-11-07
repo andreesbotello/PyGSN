@@ -30,8 +30,8 @@ def parse_observations_content(content: str) -> dict[str, Any]:
     """
     gnss_obs = {}
     ins_att = (0.0, 0.0, 0.0)
-    decl = -0.700
-    geoid_n = 50.0166
+    decl = 0.0          # Declinación D [deg], IGRF/WMM (Este positivo)
+    geoid_n = 0.0       # Ondulación del geoide N [m]
     ell_name = "GRS80"
 
     for line in content.splitlines():
@@ -114,13 +114,11 @@ class GeoreferencingOperator(BaseOperator):
 
         obs_input = kwargs.get("observations")
         if obs_input is None:
-            default_obs = Path(r"data\observaciones_sensores.txt")
-            if default_obs.exists():
-                obs_input = default_obs
-                result.log(f"Usando observaciones por defecto: {default_obs}")
-            else:
-                result.error_message = "No se proporcionaron observaciones GNSS/INS para el calculo."
-                return result
+            result.error_message = (
+                "No se proporcionaron observaciones GNSS/INS para el calculo "
+                "(parametro 'observations': ruta, texto o dict)."
+            )
+            return result
 
         parsed_data = {}
         if isinstance(obs_input, (str, Path)) and (isinstance(obs_input, Path) or Path(obs_input).exists()):
@@ -134,8 +132,8 @@ class GeoreferencingOperator(BaseOperator):
 
         gnss_obs = parsed_data.get("gnss_observations", {})
         ins_att = parsed_data.get("ins_attitude_deg", (0.0, 0.0, 0.0))
-        decl = kwargs.get("magnetic_declination_deg", parsed_data.get("magnetic_declination_deg", -0.700))
-        geoid_n = kwargs.get("geoid_undulation_n", parsed_data.get("geoid_undulation_N", 50.0166))
+        decl = kwargs.get("magnetic_declination_deg", parsed_data.get("magnetic_declination_deg", 0.0))
+        geoid_n = kwargs.get("geoid_undulation_n", parsed_data.get("geoid_undulation_N", 0.0))
         ell_name = parsed_data.get("ellipsoid_name", project.ellipsoid_name)
         ell = WGS84 if ell_name == "WGS84" else GRS80
 

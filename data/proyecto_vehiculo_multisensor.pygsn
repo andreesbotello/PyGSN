@@ -12,7 +12,8 @@
   "config": {
     "utm_zone": 30,
     "geoid_undulation_n": 49.548,
-    "mag_declination_deg": 1.25
+    "mag_declination_deg": -1.25,
+    "declination_convention": "IGRF_EAST_POSITIVE"
   },
   "platform": {
     "name": "Plataforma de Referencia (4x GNSS + INS + 2x CAM)",

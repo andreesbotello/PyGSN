@@ -138,7 +138,7 @@ class TestGeoreferencingWorkflow(unittest.TestCase):
             name="ETRS89 Campus",
             ellipsoid="GRS80",
             geoid_undulation_N=50.0166,
-            magnetic_declination_deg=-0.700,
+            magnetic_declination_deg=0.700,  # D IGRF (Este +)
             utm_zone=30,
             utm_hemisphere="N"
         )
@@ -407,11 +407,10 @@ class TestGeoreferencingWorkflow(unittest.TestCase):
     def test_import_sensors_from_table_excel(self):
         """Valida la importación completa desde tabla Excel (.xlsx) con geometría y observables."""
         from pathlib import Path
-        table_path = Path(__file__).resolve().parent.parent / "data" / "calibracion_rig_multisensor.csv"
-        if not table_path.exists():
-            table_path = Path(r"data\calibracion_rig_multisensor.xlsx")
-        if not table_path.exists():
-            self.skipTest("Tabla de sensores no encontrada")
+        # Dataset interno neutro en formato Excel (generado desde el CSV interno con
+        # .agents/utilities/generate_internal_xlsx_dataset.py); sin dependencias externas al repositorio.
+        table_path = Path(__file__).resolve().parent.parent / "data" / "calibracion_rig_multisensor.xlsx"
+        self.assertTrue(table_path.exists(), f"Falta el dataset interno: {table_path}")
 
         plat = Platform(name="Plataforma Calibracion")
         imported = plat.import_sensors_from_table(table_path)
@@ -464,7 +463,7 @@ class TestGeoreferencingWorkflow(unittest.TestCase):
             name="ETRS89",
             ellipsoid="GRS80",
             geoid_undulation_N=50.0166,
-            magnetic_declination_deg=-0.7000,
+            magnetic_declination_deg=0.700,  # D IGRF (Este +)
             utm_zone=30,
             utm_hemisphere="N"
         )
@@ -490,7 +489,7 @@ class TestGeoreferencingWorkflow(unittest.TestCase):
         self.assertAlmostEqual(dlg.last_solution.attitude_gnss_deg[1], -1.926075, places=5)
         self.assertAlmostEqual(dlg.last_solution.attitude_gnss_deg[2], 112.274661, places=5)
 
-        # Comprobar actitud INS con boresight y declinación -0.7
+        # Comprobar actitud INS con boresight y declinación D = +0.7 (IGRF)
         self.assertAlmostEqual(dlg.last_solution.attitude_ins_total_deg[0], 1.375827, places=5)
         self.assertAlmostEqual(dlg.last_solution.attitude_ins_total_deg[1], -1.698494, places=5)
         self.assertAlmostEqual(dlg.last_solution.attitude_ins_total_deg[2], 114.828264, places=5)

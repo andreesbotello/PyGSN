@@ -132,7 +132,7 @@ class TestMathBatteryRotations(unittest.TestCase):
             roll_rad=np.radians(1.0),
             pitch_rad=np.radians(2.0),
             yaw_rad=np.radians(45.0),
-            declination_rad=np.radians(-0.700),
+            declination_rad=np.radians(0.700),
             alpha_rad=np.radians(0.1),
             beta_rad=np.radians(-0.2),
             gamma_rad=np.radians(0.5)
@@ -287,7 +287,7 @@ class TestMathBatteryGeoreferencingPipeline(unittest.TestCase):
             gnss_sensor_codes=self.gnss_codes,
             ins_attitude_deg=(0.263568, -0.437974, 2.869214),
             ins_boresight_deg=self.platform.sensors["INS"].boresight_deg,
-            magnetic_declination_deg=-0.700,
+            magnetic_declination_deg=0.700,  # D IGRF (Este +)
             geoid_undulation_N=50.0166,
             ellipsoid=GRS80,
             utm_zone=30,
@@ -300,7 +300,7 @@ class TestMathBatteryGeoreferencingPipeline(unittest.TestCase):
             gnss_observations=self.obs,
             ins_attitude_deg=(0.263568, -0.437974, 2.869214),
             gnss_sensor_codes=self.gnss_codes,
-            magnetic_declination_deg=-0.700,
+            magnetic_declination_deg=0.700,  # D IGRF (Este +)
             geoid_undulation_N=50.0166,
             ellipsoid=GRS80,
             utm_zone=30,

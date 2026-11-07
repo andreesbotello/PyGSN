@@ -87,7 +87,11 @@ class DialogNewProject(BaseDialog):
         self.spin_decl.setDecimals(4)
         self.spin_decl.setValue(0.0)
         self.spin_decl.setSuffix(" °")
-        form.addRow("Declinación Magnética:", self.spin_decl)
+        self.spin_decl.setToolTip(
+            "Declinación magnética D según IGRF/WMM, positiva hacia el Este.\n"
+            "Rumbo geodésico = rumbo magnético + D."
+        )
+        form.addRow("Declinación D (IGRF, Este +):", self.spin_decl)
 
         layout.addLayout(form)
         layout.addSpacing(6)
@@ -171,7 +175,11 @@ class DialogProjectProperties(BaseDialog):
         self.spin_decl.setDecimals(4)
         self.spin_decl.setValue(float(project.config.get("mag_declination_deg", 0.0)))
         self.spin_decl.setSuffix(" °")
-        form.addRow("Declinación Magnética:", self.spin_decl)
+        self.spin_decl.setToolTip(
+            "Declinación magnética D según IGRF/WMM, positiva hacia el Este.\n"
+            "Rumbo geodésico = rumbo magnético + D."
+        )
+        form.addRow("Declinación D (IGRF, Este +):", self.spin_decl)
 
         layout.addLayout(form)
         layout.addSpacing(6)
@@ -270,7 +278,11 @@ class DialogCreateReferenceSystem(BaseDialog):
         self.spin_decl.setDecimals(4)
         self.spin_decl.setValue(0.0)
         self.spin_decl.setSuffix(" °")
-        form.addRow("Declinación Magnética:", self.spin_decl)
+        self.spin_decl.setToolTip(
+            "Declinación magnética D según IGRF/WMM, positiva hacia el Este.\n"
+            "Rumbo geodésico = rumbo magnético + D."
+        )
+        form.addRow("Declinación D (IGRF, Este +):", self.spin_decl)
 
         layout.addLayout(form)
         layout.addSpacing(6)
@@ -360,7 +372,11 @@ class DialogReferenceSystemProperties(BaseDialog):
         self.spin_decl.setDecimals(4)
         self.spin_decl.setValue(float(ref_sys.magnetic_declination_deg))
         self.spin_decl.setSuffix(" °")
-        form.addRow("Declinación Magnética:", self.spin_decl)
+        self.spin_decl.setToolTip(
+            "Declinación magnética D según IGRF/WMM, positiva hacia el Este.\n"
+            "Rumbo geodésico = rumbo magnético + D."
+        )
+        form.addRow("Declinación D (IGRF, Este +):", self.spin_decl)
 
         self.chk_basemap = QCheckBox("Mostrar mapa base (OpenStreetMap)")
         self.chk_basemap.setChecked(getattr(ref_sys, "show_basemap", True))

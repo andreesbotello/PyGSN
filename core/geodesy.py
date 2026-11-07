@@ -10,7 +10,12 @@ Funciones de geodesia computacional de alta precision (np.float64):
 """
 
 from dataclasses import dataclass
+from functools import cached_property
+import logging
+import re
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -20,23 +25,23 @@ class Ellipsoid:
     a: np.float64          # Semieje mayor [m]
     inv_f: np.float64      # Aplanamiento inverso 1/f
 
-    @property
+    @cached_property
     def f(self) -> np.float64:
         """Aplanamiento geometrico f = 1 / inv_f."""
         return np.float64(1.0) / self.inv_f
 
-    @property
+    @cached_property
     def b(self) -> np.float64:
         """Semieje menor b = a * (1 - f) [m]."""
         return self.a * (np.float64(1.0) - self.f)
 
-    @property
+    @cached_property
     def e2(self) -> np.float64:
         """Primera excentricidad al cuadrado: e^2 = 2f - f^2 = (a^2 - b^2) / a^2."""
         f = self.f
         return np.float64(2.0) * f - f * f
 
-    @property
+    @cached_property
     def ep2(self) -> np.float64:
         """Segunda excentricidad al cuadrado: e'^2 = (a^2 - b^2) / b^2 = e^2 / (1 - e^2)."""
         e2 = self.e2
@@ -176,27 +181,57 @@ def dms_to_rad(deg: int | float, minutes: int | float, seconds: float, sign: int
     return np.radians(np.float64(total_deg))
 
 
-def rad_to_dms(rad: np.float64) -> tuple[int, int, float, str]:
+def rad_to_dms(rad: np.float64, decimals: int = 6) -> tuple[int, int, float, str]:
     """
-    Convierte radianes a formato (grados, minutos, segundos, string formateado).
-    Ejemplo: 39º28'53.133637"
+    Convierte radianes a (grados, minutos, segundos, string formateado). Ejemplo: 39º28'53.133637"
+
+    Los segundos se redondean a `decimals` ANTES del acarreo, de modo que nunca se produce
+    un valor 60.000000 en la salida. El signo se aplica al primer componente no nulo
+    (ej. -0º20'00" -> (0, -20, 0.0)); el string lo incluye siempre.
     """
-    deg_total = np.degrees(rad)
-    sign = "-" if deg_total < 0 else " "
-    deg_abs = abs(deg_total)
-    d = int(deg_abs)
-    m_float = (deg_abs - d) * 60.0
-    m = int(m_float)
-    s = (m_float - m) * 60.0
-    # Proteccion contra redondeo a 60.0
-    if s >= 59.999999999:
-        s = 0.0
+    deg_total = float(np.degrees(np.float64(rad)))
+    negative = deg_total < 0.0
+    total_s = round(abs(deg_total) * 3600.0, decimals)
+    d = int(total_s // 3600.0)
+    m = int((total_s - d * 3600.0) // 60.0)
+    s = round(total_s - d * 3600.0 - m * 60.0, decimals)
+    if s >= 60.0:
+        s -= 60.0
         m += 1
-        if m == 60:
-            m = 0
-            d += 1
-    formatted = f"{sign}{d:02d}º{m:02d}'{s:09.6f}\""
-    return d if sign == " " else -d, m, s, formatted
+    if m >= 60:
+        m -= 60
+        d += 1
+    s = abs(s)  # evita -0.0
+
+    sign_char = "-" if negative and total_s > 0.0 else " "
+    width = 3 + decimals if decimals > 0 else 2
+    formatted = f"{sign_char}{d:02d}º{m:02d}'{s:0{width}.{decimals}f}\""
+
+    if sign_char == "-":
+        if d != 0:
+            d = -d
+        elif m != 0:
+            m = -m
+        else:
+            s = -s
+    return d, m, s, formatted
+
+
+# Limite de validez de la serie de Gauss-Kruger de 5o orden implementada: a |dlon| = 3.5 deg el
+# error ya alcanza ~0.1 mm en Este; crece a ~1.6 mm a 4.5 deg, ~11 mm a 6 deg y ~0.2 m a 9 deg.
+UTM_SERIES_DLON_LIMIT_RAD = np.radians(3.5)
+_zones_warned: set[int] = set()
+
+
+def _warn_if_outside_zone(delta_lam_rad: float, zone: int) -> None:
+    """Aviso (una vez por huso y sesión) si se proyecta lejos del meridiano central."""
+    if abs(float(delta_lam_rad)) > UTM_SERIES_DLON_LIMIT_RAD + 1e-9 and zone not in _zones_warned:
+        _zones_warned.add(zone)
+        logger.warning(
+            "UTM huso %d: proyección a %.2f deg del meridiano central (> 3.5 deg). "
+            "El error de la serie supera el milímetro y crece rápidamente; use el huso propio del punto.",
+            zone, float(np.degrees(abs(delta_lam_rad)))
+        )
 
 
 def utm_projection(
@@ -226,7 +261,9 @@ def utm_projection(
     a = ell.a
 
     phi = lat_rad
-    delta_lam = lon_rad - lon0_rad
+    # Diferencia de longitud normalizada a [-pi, pi] (continuidad en el antimeridiano +-180 deg)
+    delta_lam = np.arctan2(np.sin(lon_rad - lon0_rad), np.cos(lon_rad - lon0_rad))
+    _warn_if_outside_zone(delta_lam, zone)
 
     sin_phi = np.sin(phi)
     cos_phi = np.cos(phi)
@@ -297,7 +334,8 @@ def utm_meridian_convergence(
     lon0_rad = np.radians(lon0_deg)
 
     phi = np.float64(lat_rad)
-    dl = np.float64(lon_rad - lon0_rad)
+    dl0 = np.float64(lon_rad) - lon0_rad
+    dl = np.float64(np.arctan2(np.sin(dl0), np.cos(dl0)))   # continuidad en +-180 deg
 
     sin_p = np.sin(phi)
     cos_p = np.cos(phi)
@@ -381,7 +419,9 @@ def utm_inverse(
     term_lon1 = D
     term_lon3 = ((D**3) / 6.0) * (1.0 + 2.0 * t1 + eta1_2)
     term_lon5 = ((D**5) / 120.0) * (5.0 - 2.0 * eta1_2 + 28.0 * t1 - 3.0 * (eta1_2**2) + 8.0 * ep2 + 24.0 * (t1**2))
-    lon = lon0_rad + (term_lon1 - term_lon3 + term_lon5) / cos_p1
+    dlon = (term_lon1 - term_lon3 + term_lon5) / cos_p1
+    _warn_if_outside_zone(dlon, zone)
+    lon = lon0_rad + dlon
 
     return lat, lon
 
@@ -413,36 +453,94 @@ def grid_bearing(yaw_rad: float | np.floating, gamma_rad: float | np.floating) -
     return np.float64(normalize_angle_2pi(psi))
 
 
+_COORD_TOKEN_RE = re.compile(r"\d+(?:[.,]\d+)?|[A-Za-z]|[º°'\"�]|[-+]|\S")
+_HEMI_NEGATIVE = frozenset("SWO")     # Sur, Oeste (W / O)
+_HEMI_POSITIVE = frozenset("NE")
+
+
 def parse_coordinate_string(s: str) -> float:
     """
-    Parsea una coordenada en formato sexagesimal (ej: 39º28'53.133637", -0º20'7.650964", 39d28m53.13s)
-    o decimal estándar (ej: 39.481426, -0.335458).
-    Retorna el valor en grados decimales con signo (float).
+    Parsea una coordenada angular en grados decimales o sexagesimales y retorna grados decimales
+    con signo (float).
+
+    Formatos admitidos:
+      - Decimal:            39.481426 | -0.335458 | 39,481426
+      - Símbolos:           39º28'53.133637" | -0º20'7.650964" | 39° 28' 53.13" N
+      - Marcadores letra:   39d28m53.13s | 3d42m10.5sE
+      - Separados por blancos con hemisferio: 39 28 53.13 S | W 0 20 7.65
+
+    Reglas (gramática explícita):
+      - Hasta 3 campos numéricos: grados, minutos [0, 60), segundos [0, 60).
+      - En notación con letras (d, m), la 's' que sigue al tercer número es el marcador de
+        segundos; un hemisferio, si existe, va además (ej. '10.5sS').
+      - Hemisferio: N/E positivo, S/W/O negativo, como letra al principio o al final.
+      - Signo '-' inicial: negativo. Es un error combinar '-' con un hemisferio.
     """
-    import re
-    s_clean = s.strip().replace("“", "\"").replace("”", "\"").replace("''", "\"")
+    if not isinstance(s, str):
+        s = str(s)
+    txt = s.strip()
+    for a, b in (("“", '"'), ("”", '"'), ("″", '"'), ("′", "'"), ("''", '"')):
+        txt = txt.replace(a, b)
+    if not txt:
+        raise ValueError("Coordenada vacía.")
+
     try:
-        return float(s_clean.replace(",", "."))
+        return float(txt.replace(",", "."))
     except ValueError:
         pass
 
-    is_neg = s_clean.startswith("-") or "S" in s_clean.upper() or "W" in s_clean.upper() or "O" in s_clean.upper()
-    tokens = re.split(r"[º°'\"dmsDMS\s\-_+NSEWO\ufffd]+", s_clean)
-    tokens = [t for t in tokens if t]
-    if len(tokens) >= 3:
-        d = float(tokens[0])
-        m = float(tokens[1])
-        sec = float(tokens[2])
-        deg = d + m / 60.0 + sec / 3600.0
-    elif len(tokens) == 2:
-        d = float(tokens[0])
-        m = float(tokens[1])
-        deg = d + m / 60.0
-    elif len(tokens) == 1:
-        deg = float(tokens[0])
-    else:
-        raise ValueError(f"No se pudo parsear coordenada: {s}")
-    return -deg if is_neg else deg
+    tokens = _COORD_TOKEN_RE.findall(txt)
+    letter_markers = bool(re.search(r"\d\s*[dD]", txt))
+
+    numbers: list[float] = []
+    hemi: str | None = None
+    minus = False
+    prev_number = False
+    for idx, tok in enumerate(tokens):
+        if tok[0].isdigit():
+            if len(numbers) == 3:
+                raise ValueError(f"Coordenada con más de 3 campos numéricos: '{s}'.")
+            numbers.append(float(tok.replace(",", ".")))
+            prev_number = True
+            continue
+        if tok in ("-", "+"):
+            if idx != 0:
+                raise ValueError(f"Signo '{tok}' fuera de posición en la coordenada '{s}'.")
+            minus = tok == "-"
+        elif tok in ("º", "°", "'", '"', "�"):
+            pass
+        elif tok.isalpha():
+            n = len(numbers)
+            if prev_number and tok in ("d", "D") and n == 1:
+                pass
+            elif prev_number and tok in ("m", "M") and n == 2:
+                pass
+            elif prev_number and tok in ("s", "S") and n == 3 and letter_markers:
+                pass
+            elif tok.upper() in (_HEMI_NEGATIVE | _HEMI_POSITIVE):
+                if hemi is not None and hemi != tok.upper():
+                    raise ValueError(f"Hemisferios contradictorios en la coordenada '{s}'.")
+                hemi = tok.upper()
+            else:
+                raise ValueError(f"Carácter '{tok}' no reconocido en la coordenada '{s}'.")
+        else:
+            raise ValueError(f"Carácter '{tok}' no reconocido en la coordenada '{s}'.")
+        prev_number = False
+
+    if not numbers:
+        raise ValueError(f"No se pudo parsear la coordenada: '{s}'.")
+    if minus and hemi is not None:
+        raise ValueError(f"Coordenada ambigua (signo '-' y hemisferio '{hemi}'): '{s}'.")
+
+    d = numbers[0]
+    m = numbers[1] if len(numbers) > 1 else 0.0
+    sec = numbers[2] if len(numbers) > 2 else 0.0
+    if not (0.0 <= m < 60.0) or not (0.0 <= sec < 60.0):
+        raise ValueError(f"Minutos y segundos deben estar en [0, 60): '{s}'.")
+
+    deg = d + m / 60.0 + sec / 3600.0
+    negative = minus or (hemi in _HEMI_NEGATIVE)
+    return -deg if negative else deg
 
 
 # Alias de compatibilidad

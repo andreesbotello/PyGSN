@@ -119,13 +119,14 @@ class TestProjectAndAssets(unittest.TestCase):
 class TestOperatorPipeline(unittest.TestCase):
     def setUp(self):
         # Cargar proyecto de prueba estandar
-        proj_path = Path(r"data\proyecto_vehiculo_multisensor.pygsn")
+        data_dir = Path(__file__).resolve().parents[1] / "data"
+        proj_path = data_dir / "proyecto_vehiculo_multisensor.pygsn"
         if proj_path.exists():
             self.project = Project.load(proj_path)
         else:
             self.project = Project(name="Default Project")
 
-        self.obs_path = Path(r"data\observaciones_sensores.txt")
+        self.obs_path = data_dir / "observaciones_sensores.txt"
 
     def test_georeferencing_operator(self):
         """Verifica la ejecucion del operador de georreferenciacion sobre el proyecto."""

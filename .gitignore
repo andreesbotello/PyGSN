@@ -49,3 +49,25 @@ Desktop.ini
 # Generated outputs
 output/
 *.log
+
+# ------------------------------------------------------------------------------
+# Datos y proyectos de usuario (privacidad): solo se versionan los datasets
+# neutros de referencia en data/
+# ------------------------------------------------------------------------------
+*.pygsn
+*.xlsx
+*.xls
+*.csv
+*.dat
+!data/*.pygsn
+!data/*.xlsx
+!data/*.csv
+
+# Informes técnicos generados fuera de output/
+Informe*.txt
+informe*.txt
+
+# Herramientas de agentes / asistentes y notas locales
+.claude/
+.agents/
+*.local.md

@@ -10,11 +10,16 @@ Definicion de datos estructurados para plataformas universales y sensores:
 from dataclasses import dataclass, field
 from enum import Enum
 import json
+import logging
 import math
 from typing import Any
 import numpy as np
 
 from .geodesy import parse_coordinate_string, ellipsoidal_to_orthometric
+from .rotations import (
+    attitude_to_dcm, dcm_to_attitude, dcm_to_euler, sensor_to_body_matrix, e_to_n_matrix
+)
+from .validation import ValidationError
 from .kinematics import (
     rotate_polygon_2d, scale_polygon_2d,
     compute_polygon_2d_bounds, compute_utm_bounding_box_points,
@@ -23,6 +28,33 @@ from .kinematics import (
 
 # Alias de compatibilidad hacia atrás
 parse_dms_or_deg = parse_coordinate_string
+
+logger = logging.getLogger(__name__)
+
+# Convención de la declinación magnética almacenada en proyectos (.pygsn):
+# D según IGRF/WMM, positiva hacia el Este, psi_geodésico = psi_magnético + D.
+DECLINATION_CONVENTION = "IGRF_EAST_POSITIVE"
+
+
+def migrate_legacy_declination(value_deg: float, convention: str | None, context: str = "") -> float:
+    """
+    Convierte una declinación almacenada a la convención vigente (IGRF, Este positivo).
+
+    Los proyectos anteriores a la convención explícita guardaban el ángulo delta de
+    Cmn2gn = R3(delta) (psi = psi_m - delta), es decir D = -delta. Si el registro no declara
+    convención, se interpreta como legado y se invierte el signo (con aviso en el log).
+    """
+    if convention == DECLINATION_CONVENTION:
+        return float(value_deg)
+    if convention is not None:
+        raise ValueError(f"Convención de declinación desconocida en {context}: '{convention}'.")
+    if value_deg == 0.0:
+        return 0.0
+    logger.warning(
+        "%s: declinación sin convención declarada (formato antiguo, delta = %+.6f deg). "
+        "Se convierte a IGRF Este positivo: D = %+.6f deg.", context or "Registro", value_deg, -value_deg
+    )
+    return -float(value_deg)
 
 
 class SensorType(str, Enum):
@@ -199,7 +231,10 @@ class PlatformPose:
     @property
     def convergence_deg(self) -> float:
         """Convergencia de meridianos gamma en grados para el punto medio de la plataforma."""
-        if self.lat_deg == 0.0 and self.lon_deg == 0.0:
+        # Pose no resuelta: ni ECEF (el geocentro no es una posición física) ni coordenadas geodésicas.
+        # lat = lon = 0 con ECEF resuelto es una posición válida y se calcula normalmente.
+        has_ecef = bool(np.any(np.asarray(self.ecef, dtype=np.float64)))
+        if not has_ecef and self.lat_deg == 0.0 and self.lon_deg == 0.0:
             return 0.0
         from .geodesy import utm_meridian_convergence
         try:
@@ -403,7 +438,7 @@ class ReferenceSystem:
     name: str = ""                               # Nombre descriptivo (ej. "ETRS89 / UTM 30N")
     ellipsoid: str = "GRS80"                     # "GRS80" o "WGS84"
     geoid_undulation_N: float = 0.0              # metros (N)
-    magnetic_declination_deg: float = 0.0        # grados (delta)
+    magnetic_declination_deg: float = 0.0        # grados (D, IGRF/WMM, Este positivo: psi = psi_m + D)
     utm_zone: int = 30                           # 1 a 60
     utm_hemisphere: str = "N"                    # "N" o "S"
     is_active: bool = False                      # Marca de SRT activo
@@ -427,6 +462,7 @@ class ReferenceSystem:
             "ellipsoid": self.ellipsoid,
             "geoid_undulation_N": float(self.geoid_undulation_N),
             "magnetic_declination_deg": float(self.magnetic_declination_deg),
+            "magnetic_declination_convention": DECLINATION_CONVENTION,
             "utm_zone": int(self.utm_zone),
             "utm_hemisphere": self.utm_hemisphere,
             "is_active": self.is_active,
@@ -436,12 +472,17 @@ class ReferenceSystem:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ReferenceSystem":
+        decl = migrate_legacy_declination(
+            float(data.get("magnetic_declination_deg", 0.0)),
+            data.get("magnetic_declination_convention"),
+            context=f"SRT '{data.get('id', '?')}'"
+        )
         return cls(
             id=data["id"],
             name=data.get("name", data["id"]),
             ellipsoid=data.get("ellipsoid", "GRS80"),
             geoid_undulation_N=float(data.get("geoid_undulation_N", 0.0)),
-            magnetic_declination_deg=float(data.get("magnetic_declination_deg", 0.0)),
+            magnetic_declination_deg=decl,
             utm_zone=int(data.get("utm_zone", 30)),
             utm_hemisphere=str(data.get("utm_hemisphere", "N")),
             is_active=bool(data.get("is_active", False)),
@@ -664,87 +705,124 @@ class Platform:
         self.chassis_polygon = None
         self.chassis_center_b = [0.0, 0.0, 0.0]
 
-    def rotate_plane(self, angle_deg: float, plane: str = "S") -> None:
+    @staticmethod
+    def quarter_turn_matrix(plane: str, quarter_turns: int) -> np.ndarray:
         """
-        Rota el chasis en el plano ortogonal 2D activo.
-        - Plano 'S' (Superior): Rotación alrededor del eje Zb (Yaw / Guiñada) en plano Xb-Yb (ΔZb = 0).
-        - Plano 'F' (Frontal):  Rotación alrededor del eje Xb (Roll / Alabeo) en plano Yb-Zb (ΔXb = 0).
-        - Plano 'L' (Lateral):  Rotación alrededor del eje Yb (Pitch / Cabeceo) en plano Xb-Zb (ΔYb = 0).
+        Matriz de rotación activa exacta (elementos 0 y +-1) de k cuartos de vuelta (k * 90 deg):
+        - 'S' (Superior): giro sobre Zb, sentido Xb -> Yb.
+        - 'F' (Frontal):  giro sobre Xb, sentido Yb -> Zb.
+        - 'L' (Lateral):  giro sobre Yb, sentido Zb -> Xb.
+        Es una matriz de permutación con signo (det = +1): no introduce error de redondeo.
         """
+        k = int(quarter_turns) % 4
+        c = (1, 0, -1, 0)[k]
+        s = (0, 1, 0, -1)[k]
+        p_mode = str(plane).strip().upper()
+        if p_mode == "S":
+            A = [[c, -s, 0], [s, c, 0], [0, 0, 1]]
+        elif p_mode == "F":
+            A = [[1, 0, 0], [0, c, -s], [0, s, c]]
+        elif p_mode == "L":
+            A = [[c, 0, s], [0, 1, 0], [-s, 0, c]]
+        else:
+            raise ValidationError(f"Plano de rotación desconocido '{plane}' (use 'S', 'F' o 'L').")
+        return np.array(A, dtype=np.float64)
+
+    def rotate_plane(self, angle_deg: float, plane: str = "S") -> np.ndarray:
+        """
+        Reorienta el b-frame de la plataforma un múltiplo exacto de 90 deg en el plano indicado.
+
+        El chasis materializa el b-frame (origen PLA, ejes FRD, orientación 0,0,0); por ello solo
+        se admiten giros de k * 90 deg, que son permutaciones de ejes con signo (exactas). Girar el
+        chasis equivale a redefinir el b-frame, de modo que se transforman de forma rígida y
+        coherente, respecto al origen PLA:
+          - Geometría del chasis (polígono de planta, centro y dimensiones).
+          - Lever-arms de todos los sensores:      l' = A l
+          - Boresight de todos los sensores:      Cs2b' = A Cs2b
+          - Pose georreferenciada (si existe):    Cb2n' = Cb2n A^T  (la posición del PLA no cambia)
+        Las coordenadas e-frame de los sensores (georef) no cambian: el objeto físico es el mismo.
+
+        Limitación del modelo de chasis (extrusión a lo largo de Zb): en giros de +-90 deg sobre
+        Xb o Yb el eje de extrusión pasa a horizontal y la planta resultante es el rectángulo
+        envolvente del prisma girado.
+
+        Parámetros:
+            angle_deg: Ángulo de giro [deg]; debe ser múltiplo de 90.
+            plane: 'S' (eje Zb), 'F' (eje Xb) o 'L' (eje Yb).
+
+        Retorna:
+            Matriz A (3x3) aplicada a las coordenadas b-frame.
+        """
+        ang = float(angle_deg)
+        if not math.isfinite(ang):
+            raise ValidationError(f"El ángulo de rotación del chasis debe ser finito (dado: {angle_deg}).")
+        k_real = ang / 90.0
+        k = int(round(k_real))
+        if abs(k_real - k) > 1e-9:
+            raise ValidationError(
+                f"El chasis materializa el b-frame (FRD) y solo admite giros múltiplos de 90° "
+                f"(dado: {ang:g}°)."
+            )
+        A = self.quarter_turn_matrix(plane, k)
+        if k % 4 == 0:
+            return A
+
+        self._rotate_chassis_geometry(A)
+
+        for sens in self.sensors.values():
+            sens.lever_arm_b = A @ np.asarray(sens.lever_arm_b, dtype=np.float64)
+            a, b, g = (np.radians(np.float64(v)) for v in sens.boresight_deg)
+            a2, b2, g2 = dcm_to_euler(A @ sensor_to_body_matrix(a, b, g))
+            sens.boresight_deg = (float(np.degrees(a2)), float(np.degrees(b2)), float(np.degrees(g2)))
+
+        if self.pose_e is not None:
+            r, p, y = (np.radians(np.float64(v)) for v in self.pose_e.attitude_rpy_deg)
+            Cb2n_new = attitude_to_dcm(r, p, y) @ A.T
+            lat = np.radians(np.float64(self.pose_e.lat_deg))
+            lon = np.radians(np.float64(self.pose_e.lon_deg))
+            Cb2e_new = e_to_n_matrix(lat, lon).T @ Cb2n_new
+            r2, p2, y2 = dcm_to_attitude(Cb2n_new)
+            self.pose_e.attitude_rpy_deg = (float(np.degrees(r2)), float(np.degrees(p2)), float(np.degrees(y2)))
+            self.pose_e.dcm_b2e = [[float(v) for v in row] for row in Cb2e_new]
+
+        return A
+
+    def _rotate_chassis_geometry(self, A: np.ndarray) -> None:
+        """Aplica la permutación con signo A a la geometría del chasis (sin redondeos intermedios)."""
         self.ensure_polygon()
-        if not self.has_dimensions:
+        center = A @ np.asarray(self.chassis_center_b, dtype=np.float64)
+        if not self.has_dimensions or not self.chassis_polygon:
+            self.chassis_center_b = [float(v) for v in center]
             return
 
-        rad = np.radians(angle_deg)
-        cos_a = np.cos(rad)
-        sin_a = np.sin(rad)
-        p_mode = plane.upper()
+        poly = np.asarray(self.chassis_polygon, dtype=np.float64)
+        cz = float(self.chassis_center_b[2])
+        hz = float(self.height_m) / 2.0
+        z0, z1 = cz - hz, cz + hz
 
-        if p_mode == "S":
-            # Rotación en plano Xb-Yb (Eje Zb / Yaw)
-            if self.chassis_polygon:
-                rotated = rotate_polygon_2d(self.chassis_polygon, angle_deg)
-                self.chassis_polygon = [[float(p[0]), float(p[1])] for p in rotated]
-                b2d = compute_polygon_2d_bounds(self.chassis_polygon)
-                self.length_m = b2d["length_m"]
-                self.width_m = b2d["width_m"]
-            else:
-                l_old, w_old = self.length_m, self.width_m
-                self.length_m = round(l_old * abs(cos_a) + w_old * abs(sin_a), 4)
-                self.width_m = round(l_old * abs(sin_a) + w_old * abs(cos_a), 4)
+        if abs(A[2, 2]) == 1.0:
+            # Zb se conserva (giros sobre Zb o de 180 deg): la extrusión sigue siendo vertical
+            A2 = A[:2, :2]
+            new_poly = poly @ A2.T
+            if np.linalg.det(A2) < 0.0:
+                new_poly = new_poly[::-1]   # conservar el sentido de recorrido del polígono
+            z_new = sorted((A[2, 2] * z0, A[2, 2] * z1))
+        else:
+            # Zb pasa a horizontal: huella = rectángulo envolvente del prisma girado
+            pts = np.vstack([
+                np.column_stack([poly, np.full(len(poly), z0)]),
+                np.column_stack([poly, np.full(len(poly), z1)])
+            ]) @ A.T
+            x_min, y_min = pts[:, 0].min(), pts[:, 1].min()
+            x_max, y_max = pts[:, 0].max(), pts[:, 1].max()
+            new_poly = np.array([[x_max, y_min], [x_max, y_max], [x_min, y_max], [x_min, y_min]])
+            z_new = (pts[:, 2].min(), pts[:, 2].max())
 
-        elif p_mode == "F":
-            # Rotación en plano Yb-Zb (Eje Xb / Roll) -> transforma Ancho (Yb) y Alto (Zb)
-            w_old = self.width_m
-            h_old = self.height_m
-
-            # Intercambio exacto para múltiplos de 90°
-            is_90_mult = abs(abs(angle_deg) % 180.0 - 90.0) < 1e-3
-            is_180_mult = abs(abs(angle_deg) % 180.0) < 1e-3
-
-            if is_90_mult:
-                w_new, h_new = h_old, w_old
-            elif is_180_mult:
-                w_new, h_new = w_old, h_old
-            else:
-                w_new = max(0.05, w_old * abs(cos_a) + h_old * abs(sin_a))
-                h_new = max(0.05, w_old * abs(sin_a) + h_old * abs(cos_a))
-
-            self.width_m = round(float(w_new), 4)
-            self.height_m = round(float(h_new), 4)
-
-            # Escalar proporcionalmente los vértices Yb del polígono de chasis
-            if self.chassis_polygon and w_old > 1e-4:
-                scale_y = w_new / w_old
-                cy = self.chassis_center_b[1]
-                for p in self.chassis_polygon:
-                    p[1] = round(float(cy + (p[1] - cy) * scale_y), 4)
-
-        elif p_mode == "L":
-            # Rotación en plano Xb-Zb (Eje Yb / Pitch) -> transforma Largo (Xb) y Alto (Zb)
-            l_old = self.length_m
-            h_old = self.height_m
-
-            is_90_mult = abs(abs(angle_deg) % 180.0 - 90.0) < 1e-3
-            is_180_mult = abs(abs(angle_deg) % 180.0) < 1e-3
-
-            if is_90_mult:
-                l_new, h_new = h_old, l_old
-            elif is_180_mult:
-                l_new, h_new = l_old, h_old
-            else:
-                l_new = max(0.05, l_old * abs(cos_a) + h_old * abs(sin_a))
-                h_new = max(0.05, l_old * abs(sin_a) + h_old * abs(cos_a))
-
-            self.length_m = round(float(l_new), 4)
-            self.height_m = round(float(h_new), 4)
-
-            # Escalar proporcionalmente los vértices Xb del polígono de chasis
-            if self.chassis_polygon and l_old > 1e-4:
-                scale_x = l_new / l_old
-                cx = self.chassis_center_b[0]
-                for p in self.chassis_polygon:
-                    p[0] = round(float(cx + (p[0] - cx) * scale_x), 4)
+        self.chassis_polygon = [[float(x), float(y)] for x, y in new_poly]
+        self.chassis_center_b = [float(v) for v in center]
+        self.length_m = float(new_poly[:, 0].max() - new_poly[:, 0].min())
+        self.width_m = float(new_poly[:, 1].max() - new_poly[:, 1].min())
+        self.height_m = float(z_new[1] - z_new[0])
 
 
     def scale_dimensions(self, factor_l: float, factor_w: float, factor_h: float = 1.0) -> None:
@@ -1263,7 +1341,11 @@ class Platform:
         )
         h_orto = ellipsoidal_to_orthometric(h_m, srt.geoid_undulation_N)
         att = sol.attitude_ins_total_deg if method_str == "INS" else sol.attitude_gnss_deg
-        dcm_b2e = sol.Cb2n_ins @ sol.Ce2n_centroid if method_str == "INS" else (sol.Ce2n_centroid.T @ sol.Cb2n_gnss).T
+        # Cb2e efectivamente usada en la propagación de sensores: Cb2e = Cn2e(PLA) @ Cb2n
+        if method_str == "INS":
+            dcm_b2e = sol.Cb2e_ins if sol.Cb2e_ins is not None else sol.Ce2n_centroid.T @ sol.Cb2n_ins
+        else:
+            dcm_b2e = sol.Cb2e_gnss if sol.Cb2e_gnss is not None else sol.Ce2n_centroid.T @ sol.Cb2n_gnss
 
         self.pose_e = PlatformPose(
             ref_system_id=srt.id,

@@ -94,7 +94,10 @@ def n_to_e_matrix(lat_rad: np.float64, lon_rad: np.float64) -> np.ndarray:
 def euler_to_dcm(a1: np.float64, a2: np.float64, a3: np.float64) -> np.ndarray:
     """
     Construye una matriz DCM segun la secuencia estandar de Euler:
-    C = R3(a3) @ R2(a2) @ R1(a1)
+    C = R3(a3) @ R2(a2) @ R1(a1)   (R1, R2, R3 pasivas)
+
+    ADVERTENCIA: euler_to_dcm(roll, pitch, yaw) NO es Cb2n. Con rotaciones pasivas,
+    Cb2n = R3(-yaw) R2(-pitch) R1(-roll): usar attitude_to_dcm(roll, pitch, yaw).
     """
     return R3(a3) @ (R2(a2) @ R1(a1))
 
@@ -114,12 +117,13 @@ def dcm_to_euler(C: np.ndarray) -> tuple[np.float64, np.float64, np.float64]:
     C = R3(a3) @ R2(a2) @ R1(a1)
 
     Protegido contra Gimbal Lock (|sin(a2)| -> 1).
+    a2 se extrae con atan2(C20, hypot(C21, C22)) en lugar de arcsin(C20): es exacto
+    cerca de +-90 deg (arcsin esta mal condicionado alli) y no necesita recorte [-1, 1].
     """
-    sin_a2 = np.clip(C[2, 0], -1.0, 1.0)
-    a2 = np.arcsin(sin_a2)
-    cos_a2 = np.cos(a2)
+    cos_a2 = np.hypot(C[2, 1], C[2, 2])
+    a2 = np.arctan2(C[2, 0], cos_a2)
 
-    if np.abs(cos_a2) > 1e-10:
+    if cos_a2 > 1e-10:
         a1 = np.arctan2(-C[2, 1], C[2, 2])
         a3 = np.arctan2(-C[1, 0], C[0, 0])
     else:
@@ -166,10 +170,17 @@ def body_to_sensor_matrix(alpha_rad: np.float64, beta_rad: np.float64, gamma_rad
 def magnetic_to_geodetic_north_matrix(declination_rad: np.float64) -> np.ndarray:
     """
     Matriz de rotacion Cmn2gn del n-frame orientado a Norte Magnetico
-    al n-frame orientado a Norte Geodesico:
-    Cmn2gn = R3(declination)
+    al n-frame orientado a Norte Geodesico.
+
+    Convencion IGRF/WMM (Groves Sec. 6.1.1): la declinacion D es el rumbo del Norte
+    magnetico medido desde el Norte geodesico, positiva hacia el Este. Por tanto:
+        psi_geodesico = psi_magnetico + D
+        Cmn2gn = R3(-D)        (R3 pasiva)
+
+    Parametros:
+        declination_rad: Declinacion magnetica D [rad], Este positivo.
     """
-    return R3(declination_rad)
+    return R3(-np.float64(declination_rad))
 
 
 def reorthonormalize_dcm(C: np.ndarray) -> np.ndarray:
@@ -201,11 +212,12 @@ def chain_ins_attitude_matrix(
     geomagnética hacia el Norte geodésico, y el desalineamiento angular (boresight) de montaje:
 
     Ecuación (Groves Cap. 5):
-        Cb2n = Cmn2gn(delta) @ Cs2n_mn(roll, pitch, yaw) @ (Cs2b(alpha, beta, gamma))^T
+        Cb2n = Cmn2gn(D) @ Cs2n_mn(roll, pitch, yaw) @ (Cs2b(alpha, beta, gamma))^T
+        Cmn2gn(D) = R3(-D)
 
     Parámetros:
         roll_rad, pitch_rad, yaw_rad: Ángulos de actitud observados por la IMU/INS [rad].
-        declination_rad: Declinación magnética del lugar de observación delta [rad].
+        declination_rad: Declinación magnética D del lugar [rad], convención IGRF (Este positivo).
         alpha_rad, beta_rad, gamma_rad: Ángulos de boresight de calibración del sensor [rad].
 
     Retorna:

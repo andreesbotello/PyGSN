@@ -43,7 +43,7 @@ class TestHarmonizationAZ(unittest.TestCase):
             utm_zone=30,
             utm_hemisphere="N",
             geoid_undulation_N=50.0166,
-            magnetic_declination_deg=-0.700,
+            magnetic_declination_deg=0.700,  # D IGRF (Este +)
             is_active=True
         )
         proj.add_reference_system(srt, set_active=True)
@@ -125,7 +125,7 @@ class TestHarmonizationAZ(unittest.TestCase):
         )
 
         # 1. Crear proyecto limpio
-        self.assertTrue(engine.execute('project new "Mision CLI Test" GRS80 30 50.0166 -0.700'))
+        self.assertTrue(engine.execute('project new "Mision CLI Test" GRS80 30 50.0166 0.700'))
         self.assertEqual(engine.project.name, "Mision CLI Test")
 
         # 2. Configurar chasis por comandos CLI

@@ -132,7 +132,7 @@ class CartoMapCanvas(QWidget):
         self.ref_system_id = ref_system_id
 
         # Centro de la vista cartográfica en coordenadas UTM [m]
-        # Coordenadas iniciales por defecto centradas en Campus de Vera, UPV (Valencia)
+        # Coordenadas iniciales por defecto: zona del dataset interno de referencia (data/)
         self.center_e = 725400.0
         self.center_n = 4372800.0
 

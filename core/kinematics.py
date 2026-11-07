@@ -141,7 +141,7 @@ def rotate_polygon_2d(
         center_2d: Centro de rotación [cx, cy]. Si es None, utiliza el centroide de points_2d.
 
     Retorna:
-        np.ndarray de shape (N, 2) con los puntos rotados (redondeados a 4 decimales).
+        np.ndarray de shape (N, 2) con los puntos rotados (precisión completa float64; redondear solo al presentar).
     """
     pts = np.asarray(points_2d, dtype=np.float64)
     if pts.ndim != 2 or pts.shape[1] != 2:
@@ -161,7 +161,7 @@ def rotate_polygon_2d(
     rotated_rel = rel @ rot_mat.T
     rotated_pts = rotated_rel + c
 
-    return np.round(rotated_pts, decimals=4)
+    return rotated_pts
 
 
 def scale_polygon_2d(
@@ -180,7 +180,7 @@ def scale_polygon_2d(
         center_2d: Centroide de referencia [cx, cy]. Si es None, calcula el centroide.
 
     Retorna:
-        np.ndarray de shape (N, 2) con los puntos escalados (redondeados a 4 decimales).
+        np.ndarray de shape (N, 2) con los puntos escalados (precisión completa float64; redondear solo al presentar).
     """
     pts = np.asarray(points_2d, dtype=np.float64)
     if pts.ndim != 2 or pts.shape[1] != 2:
@@ -195,7 +195,7 @@ def scale_polygon_2d(
     scaled_rel = rel * np.array([factor_x, factor_y], dtype=np.float64)
     scaled_pts = scaled_rel + c
 
-    return np.round(scaled_pts, decimals=4)
+    return scaled_pts
 
 
 def compute_polygon_2d_bounds(points_2d: np.ndarray | list[list[float]]) -> dict[str, float]:
@@ -290,4 +290,4 @@ def translate_points_3d(
     pts = np.asarray(points_3d, dtype=np.float64)
     delta = np.array([dx, dy, dz], dtype=np.float64)
     translated = pts + delta
-    return np.round(translated, decimals=4)
+    return translated

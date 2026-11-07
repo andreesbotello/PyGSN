@@ -157,6 +157,7 @@ class CLIEngine:
         self.print_line("Sistemas de Referencia Terrestres (SRT / e-frame):")
         self.print_line("  srt list                                          : Lista los SRT del proyecto")
         self.print_line("  srt add <id> [nombre] [elipsoide] [utm] [N] [dec] : Crea un nuevo SRT y lo activa")
+        self.print_line("      (dec = declinación D IGRF/WMM en grados, Este positivo; psi = psi_mag + D)")
         self.print_line("  srt select <id>                                   : Conmuta el SRT activo")
         self.print_line("")
         self.print_line("Plataformas (Vehículos / Rigs):")
@@ -171,7 +172,7 @@ class CLIEngine:
         self.print_line("  chassis pts (x,y,z) ...                           : Define vértices 3D con proyección")
         self.print_line("  chassis move <dx> <dy> [dz]                       : Traslada la carrocería")
         self.print_line("  chassis center                                    : Centra el chasis en el origen PLA [0,0,0]")
-        self.print_line("  chassis rotate <deg> [S|F|L]                      : Rota en plano ortogonal")
+        self.print_line("  chassis rotate <k*90> [S|F|L]                     : Reorienta el b-frame (chasis y sensores)")
         self.print_line("  chassis scale <fx> <fy> [fz]                      : Escala las dimensiones métricas")
         self.print_line("  chassis clear                                     : Elimina el chasis (modo chasis libre)")
         self.print_line("")
@@ -234,8 +235,8 @@ class CLIEngine:
             name = args[1] if len(args) > 1 else "Proyecto PyGSN"
             ellips = args[2].upper() if len(args) > 2 else "GRS80"
             utm_z = int(args[3]) if len(args) > 3 and args[3].lstrip("-").isdigit() else 30
-            n_geo = float(args[4]) if len(args) > 4 and self._is_float(args[4]) else 50.0166
-            decl = float(args[5]) if len(args) > 5 and self._is_float(args[5]) else -0.700
+            n_geo = float(args[4]) if len(args) > 4 and self._is_float(args[4]) else 0.0
+            decl = float(args[5]) if len(args) > 5 and self._is_float(args[5]) else 0.0
 
             proj = Project(name=name, ellipsoid_name=ellips)
             srt = ReferenceSystem(
@@ -316,8 +317,8 @@ class CLIEngine:
             rname = args[2] if len(args) >= 3 else rid
             ellips = args[3].upper() if len(args) >= 4 else "GRS80"
             utm_z = int(args[4]) if len(args) >= 5 and args[4].isdigit() else 30
-            n_geo = float(args[5]) if len(args) >= 6 and self._is_float(args[5]) else 50.0166
-            decl = float(args[6]) if len(args) >= 7 and self._is_float(args[6]) else -0.700
+            n_geo = float(args[5]) if len(args) >= 6 and self._is_float(args[5]) else 0.0
+            decl = float(args[6]) if len(args) >= 7 and self._is_float(args[6]) else 0.0
 
             rs = ReferenceSystem(
                 id=rid, name=rname, ellipsoid=ellips, utm_zone=utm_z,
@@ -498,19 +499,24 @@ class CLIEngine:
 
         elif sub in ("rotate", "rotar"):
             if len(args) < 2:
-                self.print_error("Indique el ángulo en grados (ej: chassis rotate 45 [S|F|L]).")
+                self.print_error("Indique el ángulo en grados, múltiplo de 90 (ej: chassis rotate 90 [S|F|L]).")
                 return
             try:
                 ang = float(args[1])
-                plane = args[2].upper() if len(args) > 2 else "S"
-                if plane not in ("S", "F", "L"):
-                    plane = "S"
-                plat.rotate_plane(ang, plane)
-                if self.on_chassis_modified:
-                    self.on_chassis_modified()
-                self.print_success(f"Chasis rotado {ang:+.2f}° en plano {plane}.")
             except ValueError:
                 self.print_error("El ángulo debe ser numérico.")
+                return
+            plane = args[2].upper() if len(args) > 2 else "S"
+            if plane not in ("S", "F", "L"):
+                plane = "S"
+            try:
+                plat.rotate_plane(ang, plane)
+            except ValueError as exc:
+                self.print_error(str(exc))
+                return
+            if self.on_chassis_modified:
+                self.on_chassis_modified()
+            self.print_success(f"b-frame reorientado {ang:+.0f}° en plano {plane} (chasis y sensores).")
 
         elif sub in ("scale", "escalar"):
             if len(args) < 3:

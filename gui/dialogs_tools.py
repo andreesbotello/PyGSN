@@ -165,9 +165,14 @@ class ToolDialogRotateChassis(BaseToolDialog):
 
         self.spin_angle = QDoubleSpinBox()
         self.spin_angle.setButtonSymbols(QAbstractSpinBox.NoButtons)
-        self.spin_angle.setRange(-360.0, 360.0)
-        self.spin_angle.setDecimals(1)
+        # El chasis materializa el b-frame: solo giros múltiplos de 90 deg
+        self.spin_angle.setRange(-270.0, 270.0)
+        self.spin_angle.setDecimals(0)
+        self.spin_angle.setSingleStep(90.0)
         self.spin_angle.setValue(90.0)
+        self.spin_angle.setToolTip(
+            "Reorienta el b-frame (chasis y sensores). Solo se admiten múltiplos de 90°."
+        )
         self.spin_angle.setSuffix(" °")
         form.addRow("Ángulo de Giro (θ):", self.spin_angle)
         layout.addLayout(form)

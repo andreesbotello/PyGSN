@@ -1,0 +1,12 @@
+# Normalización de finales de línea: LF en el repositorio y en la copia de trabajo
+* text=auto eol=lf
+
+# Scripts de Windows con CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binarios
+*.png binary
+*.ico binary
+*.xlsx binary
+*.pdf binary

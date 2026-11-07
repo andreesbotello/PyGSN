@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .assets import VehicleMesh
-from .models import Platform, Sensor, ReferenceSystem
+from .models import Platform, Sensor, ReferenceSystem, DECLINATION_CONVENTION, migrate_legacy_declination
 
 
 class Project:
@@ -178,7 +178,7 @@ class Project:
             "description": self.description,
             "ellipsoid_name": self.ellipsoid_name,
             "metadata": self.metadata,
-            "config": self.config,
+            "config": {**self.config, "declination_convention": DECLINATION_CONVENTION},
             "active_platform_id": self.active_platform_id,
             "platforms": {k: p.to_dict() for k, p in self.platforms.items()},
             "active_reference_system_id": self.active_reference_system_id,
@@ -211,6 +211,16 @@ class Project:
         asset_data = data.get("asset", {})
         asset = VehicleMesh.from_dict(asset_data) if asset_data else VehicleMesh.create_box_vehicle()
 
+        # Config legado: la declinación se migra igual que en los SRT (convención IGRF explícita)
+        config = dict(data.get("config", {}))
+        if "mag_declination_deg" in config:
+            config["mag_declination_deg"] = migrate_legacy_declination(
+                float(config["mag_declination_deg"]),
+                config.get("declination_convention"),
+                context="config del proyecto"
+            )
+        config["declination_convention"] = DECLINATION_CONVENTION
+
         proj = cls(
             name=data.get("name", "Proyecto"),
             description=data.get("description", ""),
@@ -221,7 +231,7 @@ class Project:
             active_reference_system_id=data.get("active_reference_system_id", ""),
             asset=asset,
             metadata=data.get("metadata", {}),
-            config=data.get("config", {})
+            config=config
         )
         return proj
 

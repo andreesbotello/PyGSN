@@ -61,7 +61,7 @@ class TestGeoreferencing(unittest.TestCase):
             platform=self.platform,
             gnss_observations=self.gnss_obs,
             ins_attitude_deg=self.ins_attitude,
-            magnetic_declination_deg=-0.700,
+            magnetic_declination_deg=0.700,  # D IGRF (Este +)
             geoid_undulation_N=50.0166
         )
 

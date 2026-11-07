@@ -2,7 +2,6 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Course](https://img.shields.io/badge/UPV-Sistemas%20de%20Navegaci%C3%B3n%20(S3)-red.svg)](https://www.upv.es/)
 
 Herramienta computacional modular de alta precisión para la transformación rigurosa entre sistemas de referencia inerciales, terrestres y de plataforma, y la georreferenciación y calibración de rigs multisensor (GNSS, IMU/INS, Cámaras, LiDAR). Desarrollada en el marco de la asignatura **Sistemas de Navegación (S3)** del Máster en Ingeniería Geomática y Geoinformación de la **Universitat Politècnica de València (UPV)**.
 

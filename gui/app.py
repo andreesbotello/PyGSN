@@ -593,9 +593,13 @@ class PyGSNMainWindow(QMainWindow):
         if not plat_id:
             return
         plat = self.project.get_platform(plat_id)
-        if not plat or not plat.has_dimensions:
+        if not plat:
             return
-        plat.rotate_plane(angle_deg, plane)
+        try:
+            plat.rotate_plane(angle_deg, plane)
+        except ValueError as exc:
+            self.show_toast(str(exc), title="Rotación no admitida", level="warning")
+            return
         self._undo_stack.append(plat.to_dict())
         self.is_dirty = True
         if plat_id in self.platform_canvases:
@@ -1872,7 +1876,7 @@ class PyGSNApp:
         # muestre el icono del programa en lugar del genérico de python.exe
         try:
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("upv.pygsn.suite.v2")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("pygsn.suite.v2")
         except Exception:
             pass
 

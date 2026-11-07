@@ -32,7 +32,8 @@ from .georeferencing import (
     GeoreferencingSolution, SensorResult,
     gnss_observations_to_ecef, compute_navigation_centroid, project_ecef_to_nframe,
     solve_attitude_kabsch, solve_pla_origin_ecef, solve_attitude_ins_chain,
-    propagate_sensor_network, compute_georef_residuals, compute_consistency_residuals
+    propagate_sensor_network, compute_georef_residuals, compute_consistency_residuals,
+    compute_attitude_uncertainty, AttitudeUncertainty
 )
 from .validation import (
     ValidationError, CollinearGeometryError, validate_finite,
@@ -67,6 +68,7 @@ __all__ = [
     "gnss_observations_to_ecef", "compute_navigation_centroid", "project_ecef_to_nframe",
     "solve_attitude_kabsch", "solve_pla_origin_ecef", "solve_attitude_ins_chain",
     "propagate_sensor_network", "compute_georef_residuals", "compute_consistency_residuals",
+    "compute_attitude_uncertainty", "AttitudeUncertainty",
     "ValidationError", "CollinearGeometryError", "validate_finite",
     "normalize_angle_pi", "normalize_angle_2pi", "normalize_angle_deg_180", "normalize_angle_deg_360",
     "validate_attitude_angles", "validate_antenna_geometry", "validate_lat_lon", "validate_safe_division",

@@ -2,11 +2,11 @@
 cd /d "%~dp0"
 setlocal enabledelayedexpansion
 
-title PyGSN - Georreferenciacion de Sensores y Navegacion [UPV]
+title PyGSN - Georreferenciacion de Sensores y Navegacion
 
 echo ===============================================================================
 echo              PyGSN - Sistema de Transformacion de Coordenadas
-echo        Georreferenciacion de Sensores y Navegacion Inercial (UPV - S3)
+echo           Georreferenciacion de Sensores y Navegacion Inercial
 echo ===============================================================================
 echo.
 
