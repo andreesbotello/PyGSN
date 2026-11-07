@@ -157,7 +157,6 @@ def main():
                         help="Ejecutar terminal interactiva CLI en consola pura (sin GUI)")
     parser.add_argument("--run", action="store_true", help="Ejecutar resolución completa en consola (modo batch)")
     parser.add_argument("--demo", action="store_true", help="Ejecutar demostración de cálculo multisensor")
-    parser.add_argument("--ref", action="store_true", help="Alias de compatibilidad")
     parser.add_argument("--project", type=str, default=None, help="Ruta al archivo de proyecto .pygsn")
     parser.add_argument("--body", type=str, default=None, help="Ruta al fichero .txt de calibración de plataforma y sensores")
     parser.add_argument("--obs", type=str, default=None, help="Ruta al fichero .txt de observaciones de campo")
@@ -196,7 +195,7 @@ def main():
             print(f"> Informe guardado exitosamente en: {args.output}")
         sys.exit(0)
 
-    if args.run or args.demo or args.ref:
+    if args.run or args.demo:
         run_cli_georeferencing(args.output, args.body, args.obs)
         sys.exit(0)
 
