@@ -31,6 +31,109 @@ def validate_finite(val_or_arr: Any, name: str = "valor") -> np.ndarray:
     return arr
 
 
+def validate_safe_division(
+    numerator: Any,
+    denominator: Any,
+    eps: float = 1e-15,
+    default: float = 0.0
+) -> np.ndarray | np.float64:
+    """
+    Realiza una división protegida contra división por cero y denominadores infinitesimales.
+    Si |denominador| < eps, retorna default.
+    """
+    num = np.asarray(numerator, dtype=np.float64)
+    den = np.asarray(denominator, dtype=np.float64)
+    is_scalar = (num.ndim == 0 and den.ndim == 0)
+    
+    with np.errstate(divide="ignore", invalid="ignore"):
+        safe = np.where(np.abs(den) >= eps, num / den, default)
+    
+    return np.float64(safe) if is_scalar else safe
+
+
+def normalize_angle_pi(angle_rad: float | np.ndarray) -> np.float64 | np.ndarray:
+    """
+    Normaliza cualquier ángulo en radianes al intervalo simétrico [-pi, pi] rad.
+    Resuelve giros de más de 360° (> 2pi) o negativos arbitrarios.
+    """
+    ang = np.asarray(angle_rad, dtype=np.float64)
+    is_scalar = (ang.ndim == 0)
+    norm = np.arctan2(np.sin(ang), np.cos(ang))
+    return np.float64(norm) if is_scalar else norm
+
+
+def normalize_angle_2pi(angle_rad: float | np.ndarray) -> np.float64 | np.ndarray:
+    """
+    Normaliza cualquier ángulo en radianes al intervalo de acimut [0, 2pi) rad.
+    """
+    ang = np.asarray(angle_rad, dtype=np.float64)
+    is_scalar = (ang.ndim == 0)
+    two_pi = np.float64(2.0 * np.pi)
+    norm = ang % two_pi
+    norm = np.where(norm < 0.0, norm + two_pi, norm)
+    return np.float64(norm) if is_scalar else norm
+
+
+def normalize_angle_deg_180(angle_deg: float | np.ndarray) -> float | np.ndarray:
+    """
+    Normaliza cualquier ángulo en grados sexagesimales al intervalo [-180, 180] deg.
+    """
+    ang = np.asarray(angle_deg, dtype=np.float64)
+    is_scalar = (ang.ndim == 0)
+    norm = (ang + 180.0) % 360.0 - 180.0
+    return float(norm) if is_scalar else norm
+
+
+def normalize_angle_deg_360(angle_deg: float | np.ndarray) -> float | np.ndarray:
+    """
+    Normaliza cualquier ángulo en grados sexagesimales al intervalo de acimut [0, 360) deg.
+    """
+    ang = np.asarray(angle_deg, dtype=np.float64)
+    is_scalar = (ang.ndim == 0)
+    norm = ang % 360.0
+    norm = np.where(norm < 0.0, norm + 360.0, norm)
+    return float(norm) if is_scalar else norm
+
+
+def validate_attitude_angles(
+    roll_rad: float | np.floating,
+    pitch_rad: float | np.floating,
+    yaw_rad: float | np.floating,
+    strict_pitch: bool = True
+) -> tuple[np.float64, np.float64, np.float64]:
+    """
+    Verifica y acondiciona los ángulos de actitud de navegación (roll, pitch, yaw) en radianes:
+    - Finitud obligatoria (sin NaN ni Inf).
+    - Límites físicos de cabeceo (pitch) en [-pi/2, pi/2] rad (Groves Sec. 5.3).
+    - Detección de singularidad de Gimbal Lock (|cos(pitch)| < 1e-10).
+    - Normalización de roll a [-pi, pi] y yaw a [0, 2pi).
+    """
+    r = np.float64(roll_rad)
+    p = np.float64(pitch_rad)
+    y = np.float64(yaw_rad)
+
+    if not (np.isfinite(r) and np.isfinite(p) and np.isfinite(y)):
+        raise ValidationError(f"Los ángulos de actitud deben ser valores finitos (dados: roll={r}, pitch={p}, yaw={y}).")
+
+    half_pi = np.float64(np.pi / 2.0)
+    tol = 1e-7
+
+    if strict_pitch and (p < -half_pi - tol or p > half_pi + tol):
+        raise ValidationError(
+            f"El ángulo de cabeceo (pitch) está fuera del límite físico [-pi/2, pi/2] rad: "
+            f"{p:.6f} rad ({np.degrees(p):.2f}°). Actitud vertical invertida."
+        )
+
+    # Clamping seguro de pitch
+    p_clamped = np.clip(p, -half_pi, half_pi)
+
+    # Normalización
+    r_norm = normalize_angle_pi(r)
+    y_norm = normalize_angle_2pi(y)
+
+    return np.float64(r_norm), np.float64(p_clamped), np.float64(y_norm)
+
+
 def validate_lat_lon(
     lat_rad: float | np.floating,
     lon_rad: float | np.floating,

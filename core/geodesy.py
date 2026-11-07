@@ -386,3 +386,67 @@ def utm_inverse(
     return lat, lon
 
 
+def ellipsoidal_to_orthometric(h_m: float | np.floating, N_m: float | np.floating) -> float:
+    """
+    Convierte altitud elipsoidal h a cota ortométrica H mediante la ondulación geoidal N:
+    H = h - N [m]
+    """
+    return float(np.float64(h_m) - np.float64(N_m))
+
+
+def orthometric_to_ellipsoidal(H_m: float | np.floating, N_m: float | np.floating) -> float:
+    """
+    Convierte cota ortométrica H a altitud elipsoidal h mediante la ondulación geoidal N:
+    h = H + N [m]
+    """
+    return float(np.float64(H_m) + np.float64(N_m))
+
+
+def grid_bearing(yaw_rad: float | np.floating, gamma_rad: float | np.floating) -> np.float64:
+    """
+    Calcula el rumbo respecto al Norte de cuadrícula de la proyección cartográfica (Grid Bearing):
+    psi_grid = yaw - gamma (convergencia de meridianos).
+    Retorna el ángulo normalizado en [0, 2pi) rad.
+    """
+    from .validation import normalize_angle_2pi
+    psi = np.float64(yaw_rad) - np.float64(gamma_rad)
+    return np.float64(normalize_angle_2pi(psi))
+
+
+def parse_coordinate_string(s: str) -> float:
+    """
+    Parsea una coordenada en formato sexagesimal (ej: 39º28'53.133637", -0º20'7.650964", 39d28m53.13s)
+    o decimal estándar (ej: 39.481426, -0.335458).
+    Retorna el valor en grados decimales con signo (float).
+    """
+    import re
+    s_clean = s.strip().replace("“", "\"").replace("”", "\"").replace("''", "\"")
+    try:
+        return float(s_clean.replace(",", "."))
+    except ValueError:
+        pass
+
+    is_neg = s_clean.startswith("-") or "S" in s_clean.upper() or "W" in s_clean.upper() or "O" in s_clean.upper()
+    tokens = re.split(r"[º°'\"dmsDMS\s\-_+NSEWO\ufffd]+", s_clean)
+    tokens = [t for t in tokens if t]
+    if len(tokens) >= 3:
+        d = float(tokens[0])
+        m = float(tokens[1])
+        sec = float(tokens[2])
+        deg = d + m / 60.0 + sec / 3600.0
+    elif len(tokens) == 2:
+        d = float(tokens[0])
+        m = float(tokens[1])
+        deg = d + m / 60.0
+    elif len(tokens) == 1:
+        deg = float(tokens[0])
+    else:
+        raise ValueError(f"No se pudo parsear coordenada: {s}")
+    return -deg if is_neg else deg
+
+
+# Alias de compatibilidad
+parse_dms_or_deg = parse_coordinate_string
+
+
+

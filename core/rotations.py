@@ -184,3 +184,56 @@ def reorthonormalize_dcm(C: np.ndarray) -> np.ndarray:
         U[:, -1] *= -1
         R = U @ Vt
     return R
+
+
+def chain_ins_attitude_matrix(
+    roll_rad: float | np.floating,
+    pitch_rad: float | np.floating,
+    yaw_rad: float | np.floating,
+    declination_rad: float | np.floating = 0.0,
+    alpha_rad: float | np.floating = 0.0,
+    beta_rad: float | np.floating = 0.0,
+    gamma_rad: float | np.floating = 0.0
+) -> np.ndarray:
+    """
+    Construye la matriz de rotación Cb2n total del vehículo estimada por el sensor INS,
+    encadenando la actitud observada en el marco magnético local, la corrección por declinación
+    geomagnética hacia el Norte geodésico, y el desalineamiento angular (boresight) de montaje:
+
+    Ecuación (Groves Cap. 5):
+        Cb2n = Cmn2gn(delta) @ Cs2n_mn(roll, pitch, yaw) @ (Cs2b(alpha, beta, gamma))^T
+
+    Parámetros:
+        roll_rad, pitch_rad, yaw_rad: Ángulos de actitud observados por la IMU/INS [rad].
+        declination_rad: Declinación magnética del lugar de observación delta [rad].
+        alpha_rad, beta_rad, gamma_rad: Ángulos de boresight de calibración del sensor [rad].
+
+    Retorna:
+        Matriz Cb2n de rotación del vehículo (b-frame) al marco de navegación (n-frame) [3x3].
+    """
+    Cs2n_mn = attitude_to_dcm(np.float64(roll_rad), np.float64(pitch_rad), np.float64(yaw_rad))
+    Cmn2gn = magnetic_to_geodetic_north_matrix(np.float64(declination_rad))
+    Cs2b = sensor_to_body_matrix(np.float64(alpha_rad), np.float64(beta_rad), np.float64(gamma_rad))
+    Cb2s = Cs2b.T
+
+    Cb2n = Cmn2gn @ (Cs2n_mn @ Cb2s)
+    return reorthonormalize_dcm(Cb2n)
+
+
+def audit_dcm_condition(C: np.ndarray) -> tuple[float, float]:
+    """
+    Audita la condición matemática de una matriz de cosenos directores (DCM) 3x3.
+
+    Retorna:
+        (det_val, ortho_error):
+            det_val: Determinante de la matriz (esperado exacto +1.0).
+            ortho_error: Error de ortogonalidad norma Frobenius ||C @ C^T - I_3||_F.
+    """
+    arr = np.asarray(C, dtype=np.float64)
+    if arr.shape != (3, 3):
+        raise ValueError(f"La matriz debe ser 3x3 para auditar condición DCM, dado: {arr.shape}")
+
+    det_val = float(np.linalg.det(arr))
+    ortho_error = float(np.linalg.norm(arr @ arr.T - np.eye(3, dtype=np.float64)))
+    return det_val, ortho_error
+

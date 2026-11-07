@@ -14,6 +14,16 @@ import math
 from typing import Any
 import numpy as np
 
+from .geodesy import parse_coordinate_string, ellipsoidal_to_orthometric
+from .kinematics import (
+    rotate_polygon_2d, scale_polygon_2d,
+    compute_polygon_2d_bounds, compute_utm_bounding_box_points,
+    translate_points_3d
+)
+
+# Alias de compatibilidad hacia atrás
+parse_dms_or_deg = parse_coordinate_string
+
 
 class SensorType(str, Enum):
     PLATFORM_ORIGIN = "ORIGIN"
@@ -24,36 +34,6 @@ class SensorType(str, Enum):
     ODOMETER = "ODOMETER"
     OTHER = "OTHER"
 
-
-def parse_dms_or_deg(s: str) -> float:
-    """
-    Parsea una coordenada en formato sexagesimal (ej: 39º28'53.133637", -0º20'7.650964", 39d28m53.13s)
-    o decimal estándar (ej: 39.481426, -0.335458).
-    """
-    import re
-    s_clean = s.strip().replace("“", "\"").replace("”", "\"").replace("''", "\"")
-    try:
-        return float(s_clean)
-    except ValueError:
-        pass
-
-    is_neg = s_clean.startswith("-") or "S" in s_clean.upper() or "W" in s_clean.upper() or "O" in s_clean.upper()
-    tokens = re.split(r"[º°'\"dmsDMS\s\-_+NSEWO\ufffd]+", s_clean)
-    tokens = [t for t in tokens if t]
-    if len(tokens) >= 3:
-        d = float(tokens[0])
-        m = float(tokens[1])
-        sec = float(tokens[2])
-        deg = d + m / 60.0 + sec / 3600.0
-    elif len(tokens) == 2:
-        d = float(tokens[0])
-        m = float(tokens[1])
-        deg = d + m / 60.0
-    elif len(tokens) == 1:
-        deg = float(tokens[0])
-    else:
-        raise ValueError(f"No se pudo parsear coordenada: {s}")
-    return -deg if is_neg else deg
 
 
 @dataclass
@@ -569,9 +549,9 @@ class Platform:
         """Devuelve los límites métricos envolventes (x_min, x_max, y_min, y_max, z_min, z_max)."""
         self.ensure_polygon()
         if self.chassis_polygon:
-            pts = np.array(self.chassis_polygon, dtype=np.float64)
-            x_min, x_max = float(np.min(pts[:, 0])), float(np.max(pts[:, 0]))
-            y_min, y_max = float(np.min(pts[:, 1])), float(np.max(pts[:, 1]))
+            b2d = compute_polygon_2d_bounds(self.chassis_polygon)
+            x_min, x_max = b2d["x_min"], b2d["x_max"]
+            y_min, y_max = b2d["y_min"], b2d["y_max"]
         else:
             hl = self.length_m / 2.0
             hw = self.width_m / 2.0
@@ -606,61 +586,50 @@ class Platform:
         gamma_deg = self.pose_e.convergence_deg
         heading_grid_deg = self.pose_e.yaw_deg - gamma_deg
         psi_rad = math.radians(heading_grid_deg)
-        sin_psi = math.sin(psi_rad)
-        cos_psi = math.cos(psi_rad)
 
-        all_e: list[float] = [e_pla]
-        all_n: list[float] = [n_pla]
-
-        # 1. Vértices del chasis en b-frame proyectados a UTM
+        # 1. Recopilar puntos métricos en b-frame: origen y chasis
+        pts_b: list[list[float]] = [[0.0, 0.0]]
         self.ensure_polygon()
         if self.chassis_polygon:
-            for pt in self.chassis_polygon:
-                xb, yb = float(pt[0]), float(pt[1])
-                e_v = e_pla + xb * sin_psi + yb * cos_psi
-                n_v = n_pla + xb * cos_psi - yb * sin_psi
-                all_e.append(e_v)
-                all_n.append(n_v)
+            pts_b.extend([[float(pt[0]), float(pt[1])] for pt in self.chassis_polygon])
         elif self.has_dimensions or (self.length_m > 0 and self.width_m > 0):
             hl = self.length_m / 2.0 if self.length_m > 0 else 1.25
             hw = self.width_m / 2.0 if self.width_m > 0 else 0.75
             cx_b = float(self.chassis_center_b[0]) if hasattr(self, "chassis_center_b") else 0.0
             cy_b = float(self.chassis_center_b[1]) if hasattr(self, "chassis_center_b") else 0.0
             for dx, dy in [(hl, -hw), (hl, hw), (-hl, hw), (-hl, -hw)]:
-                xb = cx_b + dx
-                yb = cy_b + dy
-                e_v = e_pla + xb * sin_psi + yb * cos_psi
-                n_v = n_pla + xb * cos_psi - yb * sin_psi
-                all_e.append(e_v)
-                all_n.append(n_v)
+                pts_b.append([cx_b + dx, cy_b + dy])
 
-        # 2. Sensores vinculados a la plataforma
+        # 2. Sensores no georreferenciados en este SRT específico
         for s in self.sensors.values():
-            if s.georef and s.georef.ref_system_id == self.pose_e.ref_system_id:
-                all_e.append(float(s.georef.utm_easting_m))
-                all_n.append(float(s.georef.utm_northing_m))
-            else:
-                xb, yb = float(s.lever_arm_b[0]), float(s.lever_arm_b[1])
-                e_s = e_pla + xb * sin_psi + yb * cos_psi
-                n_s = n_pla + xb * cos_psi - yb * sin_psi
-                all_e.append(e_s)
-                all_n.append(n_s)
+            if not (s.georef and s.georef.ref_system_id == self.pose_e.ref_system_id):
+                pts_b.append([float(s.lever_arm_b[0]), float(s.lever_arm_b[1])])
 
-        min_e = min(all_e)
-        max_e = max(all_e)
-        min_n = min(all_n)
-        max_n = max(all_n)
+        box = compute_utm_bounding_box_points(
+            origin_utm=(e_pla, n_pla),
+            heading_grid_rad=psi_rad,
+            b_points_2d=np.array(pts_b, dtype=np.float64)
+        )
 
-        return {
-            "min_e": round(min_e, 4),
-            "max_e": round(max_e, 4),
-            "min_n": round(min_n, 4),
-            "max_n": round(max_n, 4),
-            "span_e": round(max_e - min_e, 4),
-            "span_n": round(max_n - min_n, 4),
-            "center_e": round((min_e + max_e) / 2.0, 4),
-            "center_n": round((min_n + max_n) / 2.0, 4),
-        }
+        # 3. Incluir sensores que ya cuenten con coordenadas UTM georreferenciadas explícitas
+        georef_sensors = [s for s in self.sensors.values() if s.georef and s.georef.ref_system_id == self.pose_e.ref_system_id]
+        if georef_sensors:
+            all_e = [box["min_e"], box["max_e"]] + [float(s.georef.utm_easting_m) for s in georef_sensors]
+            all_n = [box["min_n"], box["max_n"]] + [float(s.georef.utm_northing_m) for s in georef_sensors]
+            min_e, max_e = min(all_e), max(all_e)
+            min_n, max_n = min(all_n), max(all_n)
+            return {
+                "min_e": round(min_e, 4),
+                "max_e": round(max_e, 4),
+                "min_n": round(min_n, 4),
+                "max_n": round(max_n, 4),
+                "span_e": round(max_e - min_e, 4),
+                "span_n": round(max_n - min_n, 4),
+                "center_e": round((min_e + max_e) / 2.0, 4),
+                "center_n": round((min_n + max_n) / 2.0, 4),
+            }
+
+        return box
 
     def translate(self, dx: float, dy: float, dz: float = 0.0) -> None:
         """Traslada el chasis (vértices del polígono y centroide 3D) por un delta métrico."""
@@ -714,17 +683,11 @@ class Platform:
         if p_mode == "S":
             # Rotación en plano Xb-Yb (Eje Zb / Yaw)
             if self.chassis_polygon:
-                pts = np.array(self.chassis_polygon, dtype=np.float64)
-                centroid = np.mean(pts, axis=0)
-                rel = pts - centroid
-                rot_mat = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
-                rotated_rel = rel @ rot_mat.T
-                rotated_pts = rotated_rel + centroid
-
-                self.chassis_polygon = [[round(float(p[0]), 4), round(float(p[1]), 4)] for p in rotated_pts]
-                pts_new = np.array(self.chassis_polygon)
-                self.length_m = round(float(np.max(pts_new[:, 0]) - np.min(pts_new[:, 0])), 4)
-                self.width_m = round(float(np.max(pts_new[:, 1]) - np.min(pts_new[:, 1])), 4)
+                rotated = rotate_polygon_2d(self.chassis_polygon, angle_deg)
+                self.chassis_polygon = [[float(p[0]), float(p[1])] for p in rotated]
+                b2d = compute_polygon_2d_bounds(self.chassis_polygon)
+                self.length_m = b2d["length_m"]
+                self.width_m = b2d["width_m"]
             else:
                 l_old, w_old = self.length_m, self.width_m
                 self.length_m = round(l_old * abs(cos_a) + w_old * abs(sin_a), 4)
@@ -790,16 +753,11 @@ class Platform:
             return
         self.ensure_polygon()
         if self.chassis_polygon:
-            pts = np.array(self.chassis_polygon, dtype=np.float64)
-            centroid = np.mean(pts, axis=0)
-            rel = pts - centroid
-            rel[:, 0] *= factor_l
-            rel[:, 1] *= factor_w
-            scaled_pts = rel + centroid
-            self.chassis_polygon = [[round(float(p[0]), 4), round(float(p[1]), 4)] for p in scaled_pts]
-            pts_new = np.array(self.chassis_polygon)
-            self.length_m = round(float(np.max(pts_new[:, 0]) - np.min(pts_new[:, 0])), 4)
-            self.width_m = round(float(np.max(pts_new[:, 1]) - np.min(pts_new[:, 1])), 4)
+            scaled = scale_polygon_2d(self.chassis_polygon, factor_l, factor_w)
+            self.chassis_polygon = [[float(p[0]), float(p[1])] for p in scaled]
+            b2d = compute_polygon_2d_bounds(self.chassis_polygon)
+            self.length_m = b2d["length_m"]
+            self.width_m = b2d["width_m"]
         else:
             self.length_m = round(self.length_m * factor_l, 4)
             self.width_m = round(self.width_m * factor_w, 4)
@@ -1303,7 +1261,7 @@ class Platform:
             sol.pla_origin_lat_rad, sol.pla_origin_lon_rad,
             zone=srt.utm_zone, hemisphere=srt.utm_hemisphere, ell=ell
         )
-        h_orto = h_m - srt.geoid_undulation_N
+        h_orto = ellipsoidal_to_orthometric(h_m, srt.geoid_undulation_N)
         att = sol.attitude_ins_total_deg if method_str == "INS" else sol.attitude_gnss_deg
         dcm_b2e = sol.Cb2n_ins @ sol.Ce2n_centroid if method_str == "INS" else (sol.Ce2n_centroid.T @ sol.Cb2n_gnss).T
 

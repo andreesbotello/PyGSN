@@ -8,6 +8,45 @@ mediante el problema de Procrustes Ortogonal (Algoritmo de Kabsch / SVD).
 import numpy as np
 
 
+def compute_centroid_3d(points: np.ndarray) -> np.ndarray:
+    """
+    Calcula el centroide baricéntrico métrico de un conjunto de puntos 3D.
+
+    Parámetros:
+        points: Coordenadas (3, N) o (N, 3).
+
+    Retorna:
+        Vector del centroide [cx, cy, cz] de shape (3,) en float64.
+    """
+    from .validation import validate_finite
+    pts = validate_finite(points, name="points")
+    if pts.ndim != 2:
+        raise ValueError(f"Los puntos deben tener 2 dimensiones, dado: {pts.shape}")
+    if pts.shape[0] != 3 and pts.shape[1] == 3:
+        pts = pts.T
+    return np.float64(np.mean(pts, axis=1))
+
+
+def reduce_to_centroid_3d(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Reduce un conjunto de puntos 3D a su centroide baricéntrico.
+
+    Retorna:
+        (centered_points, centroid):
+            centered_points: Puntos reducidos de shape (3, N) en float64.
+            centroid: Vector del centroide de shape (3,) en float64.
+    """
+    from .validation import validate_finite
+    pts = validate_finite(points, name="points")
+    if pts.ndim != 2:
+        raise ValueError(f"Los puntos deben tener 2 dimensiones, dado: {pts.shape}")
+    if pts.shape[0] != 3 and pts.shape[1] == 3:
+        pts = pts.T
+    centroid = np.mean(pts, axis=1, keepdims=True)
+    centered = pts - centroid
+    return np.float64(centered), np.float64(centroid.ravel())
+
+
 def kabsch_orthogonal_procrustes(
     points_from: np.ndarray,
     points_to: np.ndarray

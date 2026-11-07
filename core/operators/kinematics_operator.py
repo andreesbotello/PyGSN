@@ -12,8 +12,9 @@ from typing import Any
 import numpy as np
 
 from .base import BaseOperator, OperatorResult
-from ..geodesy import GRS80, radii_of_curvature, geodetic_to_ecef
+from ..geodesy import GRS80, geodetic_to_ecef
 from ..rotations import euler_to_dcm
+from ..kinematics import geodetic_navigation_rates
 
 
 class TrajectoryKinematicsOperator(BaseOperator):
@@ -92,16 +93,11 @@ class TrajectoryKinematicsOperator(BaseOperator):
             # 3. Integracion en n-frame (plano local métrico)
             curr_ned += v_n * dt
 
-            # 4. Mecanizacion elipsoidal en coordenadas geodésicas
-            Rm, Rn = radii_of_curvature(np.float64(curr_lat), GRS80)
-            dlat = (v_n[0] / (Rm + curr_h)) * dt
-            cos_lat = np.cos(curr_lat)
-            dlon = (v_n[1] / ((Rn + curr_h) * cos_lat)) * dt if abs(cos_lat) > 1e-12 else 0.0
-            dh = -v_n[2] * dt
-
-            curr_lat += dlat
-            curr_lon += dlon
-            curr_h += dh
+            # 4. Mecanizacion elipsoidal en coordenadas geodésicas (función matemática pura)
+            dlat_rate, dlon_rate, dh_rate = geodetic_navigation_rates(v_n, curr_lat, curr_h, GRS80)
+            curr_lat += dlat_rate * dt
+            curr_lon += dlon_rate * dt
+            curr_h += dh_rate * dt
 
             # 5. Conversion a ECEF (e-frame)
             r_ecef = geodetic_to_ecef(np.float64(curr_lat), np.float64(curr_lon), np.float64(curr_h), GRS80)
